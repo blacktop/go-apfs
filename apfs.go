@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/apex/log"
 	"github.com/blacktop/go-apfs/types"
 )
 
@@ -72,7 +73,7 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 
 	a.nxsb, err = types.ReadObj(r, 0)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read APFS container")
+		return nil, fmt.Errorf("failed to read APFS container: %w", err)
 	}
 
 	if nxsb, ok := a.nxsb.Body.(types.NxSuperblock); ok {
@@ -94,14 +95,14 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 		"magic":    a.Container.Magic.String(),
 	}).Debug("APFS Container")
 
-	utils.Indent(log.WithFields(log.Fields{
+	log.WithFields(log.Fields{
 		"checksum": fmt.Sprintf("%#x", a.Container.OMap.Hdr.Checksum()),
 		"type":     a.Container.OMap.Hdr.GetType(),
 		"oid":      fmt.Sprintf("%#x", a.Container.OMap.Hdr.Oid),
 		"xid":      fmt.Sprintf("%#x", a.Container.OMap.Hdr.Xid),
 		"sub_type": a.Container.OMap.Hdr.GetSubType(),
 		"flag":     a.Container.OMap.Hdr.GetFlag(),
-	}).Debug, 2)("Object Map")
+	}).Debug("Object Map")
 
 	if err := a.getValidCSB(); err != nil {
 		return nil, fmt.Errorf("failed to find the container superblock that has the largest transaction identifier and isnʼt malformed: %v", err)
@@ -170,7 +171,7 @@ func (a *APFS) getValidCSB() error {
 		o, err := types.ReadObj(a.r, nxsb.XpDescBase+uint64(i))
 		if err != nil {
 			if errors.Is(err, types.ErrBadBlockChecksum) {
-				utils.Indent(log.Debug, 2)(fmt.Sprintf("checkpoint block at index %d failed checksum validation. Skipping...", i))
+				log.Debug(fmt.Sprintf("checkpoint block at index %d failed checksum validation. Skipping...", i))
 				continue
 			}
 			return fmt.Errorf("failed to read XpDescBlock: %v", err)

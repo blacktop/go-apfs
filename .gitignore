@@ -17,3 +17,5 @@
 .vscode
 .hack
 __debug_bin
+dist/
+apfs.*
