@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/blacktop/ipsw/pkg/lzfse"
+	lzfse "github.com/blacktop/lzfse-cgo"
 )
 
 //go:generate stringer -type=compMethod -output decmpfs_string.go
@@ -233,12 +233,7 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 			}
 
 			if buff[0] == 0x78 { // lzvn block
-				dec, err := lzfse.NewDecoder(buff).DecodeBuffer()
-				if err != nil {
-					return err
-				}
-				// n, err = decomp.Write(lzfse.DecodeBuffer(buff))
-				n, err = decomp.Write(dec)
+				n, err = decomp.Write(lzfse.DecodeBuffer(buff))
 				if err != nil {
 					return err
 				}

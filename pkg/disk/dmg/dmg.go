@@ -19,7 +19,6 @@ import (
 	"github.com/blacktop/go-macho/types"
 	"github.com/blacktop/go-plist"
 
-	// "github.com/blacktop/ipsw/pkg/lzfse"
 	lzfse "github.com/blacktop/lzfse-cgo"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/vbauerster/mpb/v7"
@@ -319,10 +318,6 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 			if _, err := b.sr.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
 				return err
 			}
-			// dec, err := lzfse.NewDecoder(buff).DecodeBuffer() // FIXME: this is slow as sh1zzzzzz
-			// if err != nil {
-			// 	return err
-			// }
 			n, err = w.Write(lzfse.DecodeBuffer(buff))
 			if err != nil {
 				return err
@@ -414,10 +409,6 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, w *bufio.Write
 		if _, err = r.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
-		// dec, err := lzfse.NewDecoder(buff).DecodeBuffer() // FIXME: this is slow as sh1zzzzzz
-		// if err != nil {
-		// 	return err
-		// }
 		n, err = w.Write(lzfse.DecodeBuffer(buff))
 		if err != nil {
 			return
@@ -499,7 +490,7 @@ func (d *DMG) Load() error {
 			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
 		}
 	}
-
+	w.Flush()
 	var g gpt.GUIDPartitionTable
 	if err := binary.Read(bytes.NewReader(out.Bytes()), binary.LittleEndian, &g.Header); err != nil {
 		return fmt.Errorf("failed to read %T: %w", g.Header, err)

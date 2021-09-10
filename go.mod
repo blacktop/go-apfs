@@ -6,10 +6,10 @@ require (
 	github.com/apex/log v1.9.0
 	github.com/blacktop/go-macho v1.1.46
 	github.com/blacktop/go-plist v1.0.0
-	github.com/blacktop/ipsw v0.0.0-20210826193350-29ce1c3bc7d7
 	github.com/blacktop/lzfse-cgo v1.1.16
 	github.com/dustin/go-humanize v1.0.0
 	github.com/fatih/color v1.12.0
+	github.com/hashicorp/golang-lru v0.5.4
 	github.com/spf13/cobra v1.2.1
 	github.com/spf13/viper v1.8.1
 	github.com/vbauerster/mpb/v7 v7.1.4
@@ -19,7 +19,6 @@ require (
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
-	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/magiconair/properties v1.8.5 // indirect
