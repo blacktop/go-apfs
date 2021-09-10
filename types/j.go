@@ -485,19 +485,19 @@ func (val j_dir_stats_val_t) String() string {
 		val.GenCount)
 }
 
-type j_xattr_key_t struct {
+type JXattrKeyT struct {
 	// Hdr     JKeyT
 	NameLen uint16
 	Name    string
 } // __attribute__((packed))
 
-type j_xattr_val_t struct {
+type JXattrValT struct {
 	Flags   j_xattr_flags // The extended attribute recordʼs flags.
 	DataLen uint16        // The length of the extended attribute data.
 	Data    interface{}   // The extended attribute data or the identifier of a data stream that contains the data.
 } // __attribute__((packed))
 
-func (val j_xattr_val_t) String() string {
+func (val JXattrValT) String() string {
 	var vout []string
 	vout = append(vout, fmt.Sprintf("flags=%s", val.Flags.String()))
 	if val.Flags.DataEmbedded() {

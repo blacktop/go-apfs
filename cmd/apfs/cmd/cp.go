@@ -22,13 +22,18 @@ THE SOFTWARE.
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/apex/log"
+	"github.com/blacktop/go-apfs"
+	"github.com/blacktop/go-apfs/pkg/disk/dmg"
 	"github.com/spf13/cobra"
 )
 
 // cpCmd represents the cp command
 var cpCmd = &cobra.Command{
-	Use:   "cp <APFS_CONTAINER> <SRC> <DST>",
+	Use:   "cp <DMG> <SRC> [DST]",
 	Short: "🚧 Copy file from APFS container",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -37,27 +42,32 @@ var cpCmd = &cobra.Command{
 			log.SetLevel(log.DebugLevel)
 		}
 
-		// apfsPath := filepath.Clean(args[0])
+		dmgPath := filepath.Clean(args[0])
 
-		// a, err := apfs.Open(apfsPath)
-		// if err != nil {
-		// 	log.Fatal(err.Error())
-		// }
-		// defer a.Close()
+		dev, err := dmg.Open(dmgPath)
+		if err != nil {
+			return err
+		}
+		defer dev.Close()
 
-		// if len(args) > 1 {
-		// 	if err := a.Copy(args[1], args[2]); err != nil {
-		// 		log.Fatal(err.Error())
-		// 	}
-		// } else {
-		// 	cwd, err := os.Getwd()
-		// 	if err != nil {
-		// 		log.Fatal(err.Error())
-		// 	}
-		// 	if err := a.Copy(args[1], filepath.Join(cwd, filepath.Base(args[1]))); err != nil {
-		// 		log.Fatal(err.Error())
-		// 	}
-		// }
+		a, err := apfs.NewAPFS(dev)
+		if err != nil {
+			return err
+		}
+
+		if len(args) > 2 {
+			if err := a.Copy(args[1], args[2]); err != nil {
+				log.Fatal(err.Error())
+			}
+		} else {
+			cwd, err := os.Getwd()
+			if err != nil {
+				log.Fatal(err.Error())
+			}
+			if err := a.Copy(args[1], filepath.Join(cwd, filepath.Base(args[1]))); err != nil {
+				log.Fatal(err.Error())
+			}
+		}
 
 		return nil
 	},

@@ -45,21 +45,21 @@ type j_file_extent_key_t struct {
 	LogicalAddr uint64
 }
 
-type j_file_extent_val_t struct {
+type JFileExtentValT struct {
 	LenAndFlags  uint64
 	PhysBlockNum uint64
 	CryptoID     uint64
 }
 
-func (v j_file_extent_val_t) Length() uint64 {
+func (v JFileExtentValT) Length() uint64 {
 	return v.LenAndFlags & J_FILE_EXTENT_LEN_MASK
 }
 
-func (v j_file_extent_val_t) Flags() uint64 {
+func (v JFileExtentValT) Flags() uint64 {
 	return (v.LenAndFlags & J_FILE_EXTENT_FLAG_MASK) >> J_FILE_EXTENT_FLAG_SHIFT
 }
 
-func (v j_file_extent_val_t) String() string {
+func (v JFileExtentValT) String() string {
 	return fmt.Sprintf("flags=%#x, length=%#x, phys_block_num=%#x, crypto_id=%#x",
 		v.Flags(),
 		v.Length(),

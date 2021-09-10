@@ -360,7 +360,7 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 	case APFS_TYPE_EXTENT:
 	case APFS_TYPE_INODE:
 	case APFS_TYPE_XATTR:
-		var k j_xattr_key_t
+		var k JXattrKeyT
 		if err := binary.Read(r, binary.LittleEndian, &k.NameLen); err != nil {
 			return fmt.Errorf("failed to read %T: %v", k, err)
 		}
@@ -624,7 +624,7 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 			}
 			nent.Val = v
 		case APFS_TYPE_XATTR:
-			var v j_xattr_val_t
+			var v JXattrValT
 			if err := binary.Read(r, binary.LittleEndian, &v.Flags); err != nil {
 				return fmt.Errorf("failed to read %T: %v", v, err)
 			}
@@ -679,7 +679,7 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 			}
 			nent.Val = v
 		case APFS_TYPE_FILE_EXTENT:
-			var v j_file_extent_val_t
+			var v JFileExtentValT
 			if err := binary.Read(r, binary.LittleEndian, &v); err != nil {
 				return fmt.Errorf("failed to read %T: %v", v, err)
 			}

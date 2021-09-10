@@ -106,8 +106,8 @@ type CmpfEnd struct {
 func GetDecmpfsHeader(ne NodeEntry) (*DecmpfsDiskHeader, error) {
 	var hdr DecmpfsDiskHeader
 	if ne.Hdr.GetType() == APFS_TYPE_XATTR {
-		if ne.Key.(j_xattr_key_t).Name == DECMPFS_XATTR_NAME {
-			if err := binary.Read(bytes.NewReader(ne.Val.(j_xattr_val_t).Data.([]byte)), binary.LittleEndian, &hdr); err != nil {
+		if ne.Key.(JXattrKeyT).Name == DECMPFS_XATTR_NAME {
+			if err := binary.Read(bytes.NewReader(ne.Val.(JXattrValT).Data.([]byte)), binary.LittleEndian, &hdr); err != nil {
 				return nil, err
 			}
 			return &hdr, nil
@@ -128,7 +128,8 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 			return err
 		}
 
-		r.Seek(int64(rsrcHdr.HeaderSize), io.SeekStart)
+		nn, e := r.Seek(int64(rsrcHdr.HeaderSize), io.SeekStart)
+		fmt.Printf("n: %d, e: %w\n", nn, e)
 
 		var blkHdr CmpfRsrcBlockHead
 		if err := binary.Read(r, binary.BigEndian, &blkHdr.DataSize); err != nil {
@@ -169,14 +170,14 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 				}
 				n, err = decomp.ReadFrom(zr)
 				if err != nil {
-					return err
+					return fmt.Errorf("failed to read from zlib reader: %w", err)
 				}
 				zr.Close()
 				total += n
 			} else if (buff[0] & 0x0F) == 0x0F { // uncompressed block
 				nn, err := decomp.Write(buff[1:])
 				if err != nil {
-					return err
+					return fmt.Errorf("failed to write uncompressed block: %w", err)
 				}
 				total += int64(nn)
 			} else {

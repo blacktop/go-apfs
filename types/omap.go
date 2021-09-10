@@ -190,7 +190,7 @@ func (ne NodeEntry) String() string {
 	case APFS_TYPE_EXTENT:
 	case APFS_TYPE_INODE:
 	case APFS_TYPE_XATTR:
-		nout = append(nout, fmt.Sprintf("name=%s", nameColor(ne.Key.(j_xattr_key_t).Name)))
+		nout = append(nout, fmt.Sprintf("name=%s", nameColor(ne.Key.(JXattrKeyT).Name)))
 	case APFS_TYPE_SIBLING_LINK:
 		nout = append(nout, fmt.Sprintf("sibling_id=%#x", ne.Key.(SiblingKeyT).SiblingID))
 	case APFS_TYPE_DSTREAM_ID:
@@ -231,7 +231,7 @@ func (ne NodeEntry) String() string {
 			nout = append(nout, val.String())
 		case uint64:
 			nout = append(nout, fmt.Sprintf("val=%#x", val))
-		case j_xattr_val_t:
+		case JXattrValT:
 			nout = append(nout, val.String())
 		}
 	case APFS_TYPE_SIBLING_LINK:
@@ -267,7 +267,7 @@ func (ne NodeEntry) String() string {
 			nout = append(nout, val.String())
 		case uint64:
 			nout = append(nout, fmt.Sprintf("val=%#x", val))
-		case j_file_extent_val_t:
+		case JFileExtentValT:
 			nout = append(nout, val.String())
 		}
 	case APFS_TYPE_DIR_REC:

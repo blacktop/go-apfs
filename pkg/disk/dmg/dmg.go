@@ -490,7 +490,7 @@ func (d *DMG) Load() error {
 			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
 		}
 	}
-	w.Flush()
+
 	var g gpt.GUIDPartitionTable
 	if err := binary.Read(bytes.NewReader(out.Bytes()), binary.LittleEndian, &g.Header); err != nil {
 		return fmt.Errorf("failed to read %T: %w", g.Header, err)
@@ -569,7 +569,6 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 
 	for beg <= end {
 		mid = (beg + end) / 2
-
 		if off >= int64(d.Blocks[d.firstAPFSPartition].Chunks[mid].DiskOffset) && off < int64(d.Blocks[d.firstAPFSPartition].Chunks[mid].DiskOffset+d.Blocks[d.firstAPFSPartition].Chunks[mid].DiskLength) {
 			entryIdx = mid
 			break
@@ -591,11 +590,13 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 
 		r.Seek(off-int64(d.Blocks[d.firstAPFSPartition].Chunks[entryIdx].DiskOffset), io.SeekStart)
 
-		if err := binary.Read(r, binary.LittleEndian, &buf); err != nil {
-			return n, fmt.Errorf("failed to fill buffer with cache buffer: %w", err)
-		}
+		if cbuf.Len()-int(off-int64(d.Blocks[d.firstAPFSPartition].Chunks[entryIdx].DiskOffset))-len(buf) > 0 {
+			if err := binary.Read(r, binary.LittleEndian, &buf); err != nil {
+				return n, fmt.Errorf("failed to fill buffer with cache buffer: %w", err)
+			}
 
-		return n, nil
+			return len(buf), nil
+		}
 	}
 
 	w := bufio.NewWriter(&cbuf)
@@ -637,7 +638,7 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 
 	d.cache.Add(entryIdx-1, cbuf)
 
-	return n, nil
+	return len(buf), nil
 }
 
 // NewDMG creates a new DMG for accessing a dmg in an underlying reader.
