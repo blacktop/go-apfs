@@ -2,8 +2,8 @@
 name: Go
 on:
   push:
-    # branches:
-    #   - main
+    branches:
+      - main
     tags:
       - v1.*.*
   pull_request:
