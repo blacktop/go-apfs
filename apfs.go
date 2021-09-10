@@ -9,9 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/apex/log"
-	"github.com/blacktop/ipsw/internal/utils"
-	"github.com/blacktop/ipsw/pkg/apfs/types"
+	"github.com/blacktop/go-apfs/types"
 )
 
 // APFS apple file system object

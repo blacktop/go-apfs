@@ -14,10 +14,10 @@ import (
 	"strings"
 
 	"github.com/apex/log"
+	"github.com/blacktop/go-apfs/pkg/adc"
+	"github.com/blacktop/go-apfs/pkg/disk/gpt"
 	"github.com/blacktop/go-macho/types"
 	"github.com/blacktop/go-plist"
-	"github.com/blacktop/ipsw/pkg/adc"
-	"github.com/blacktop/ipsw/pkg/disk/gpt"
 
 	// "github.com/blacktop/ipsw/pkg/lzfse"
 	lzfse "github.com/blacktop/lzfse-cgo"
