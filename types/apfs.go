@@ -163,7 +163,7 @@ type ApfsSuperblockT struct {
 
 	// Fields supported on macOS 10.15+
 	SnapMetaExtOid OidT
-	VolumeGroupID  types.UUID
+	VolumeGroupID  UUID
 
 	/* Fields introduced in revision 2020-06-22 */
 
