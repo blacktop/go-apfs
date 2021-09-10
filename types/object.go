@@ -128,7 +128,6 @@ func (o Obj) String() string {
 }
 
 // ReadObj returns a verified object or error if block does not verify
-// func ReadObj(r *io.SectionReader, blockAddr uint64) (*Obj, error) {
 func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 
 	var err error
@@ -137,12 +136,6 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 	block := make([]byte, BLOCK_SIZE)
 
 	_, err = r.ReadAt(block, int64(blockAddr*BLOCK_SIZE))
-
-	// r.Seek(int64(blockAddr*BLOCK_SIZE), io.SeekStart)
-
-	// if err := binary.Read(r, binary.LittleEndian, &block); err != nil {
-	// 	return nil, fmt.Errorf("failed to read %#x sized block data: %v", BLOCK_SIZE, err)
-	// }
 
 	if !VerifyChecksum(block) {
 		return nil, fmt.Errorf("obj_phys_t data block failed checksum validation: %w", ErrBadBlockChecksum)
