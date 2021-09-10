@@ -11,6 +11,7 @@ APFS_DMG:=
 build-deps: ## Install the build dependencies
 	@echo " > Installing build deps"
 	brew install go goreleaser caarlos0/tap/svu
+	go install golang.org/x/tools/cmd/stringer
 
 .PHONY: build
 build: ## Build apfs locally
