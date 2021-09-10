@@ -1,9 +1,5 @@
 package types
 
-import (
-	"github.com/blacktop/go-macho/types"
-)
-
 type nx_counter_id_t byte //FIXME: what type
 const (
 	NX_CNTR_OBJ_CKSUM_SET  nx_counter_id_t = 0
@@ -65,7 +61,7 @@ type NxSuperblockT struct {
 	ReadOnlyCompatibleFeatures uint64
 	IncompatibleFeatures       nxIncompatFeature
 
-	UUID types.UUID
+	UUID UUID
 
 	NextOid OidT
 	NextXid XidT
@@ -94,7 +90,7 @@ type NxSuperblockT struct {
 	EvictMappingTreeOid OidT
 	Flags               nxContainerFlag
 	EFIJumpstart        uint64
-	FusionUUID          types.UUID
+	FusionUUID          UUID
 	Keylocker           prange
 	EphemeralInfos      [NX_EPH_INFO_COUNT]uint64
 

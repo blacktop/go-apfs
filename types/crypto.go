@@ -3,8 +3,6 @@ package types
 import (
 	"encoding/hex"
 	"fmt"
-
-	"github.com/blacktop/go-macho/types"
 )
 
 const (
@@ -111,7 +109,7 @@ type wrapped_meta_crypto_state_t struct {
 } // __attribute__((aligned(2), packed))
 
 type keybag_entry_t struct {
-	UUID    types.UUID
+	UUID    UUID
 	Tag     uint16
 	Keylen  uint16
 	Padding [4]byte

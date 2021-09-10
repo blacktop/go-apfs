@@ -3,7 +3,6 @@ package types
 import (
 	"fmt"
 
-	"github.com/blacktop/go-macho"
 	"github.com/fatih/color"
 )
 
@@ -69,7 +68,7 @@ type snap_meta_ext_t struct {
 
 	Flags   uint32
 	SnapXid XidT
-	UUID    macho.UUID
+	UUID    UUID
 
 	Token uint64
 } // __attribute__((packed))

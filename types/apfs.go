@@ -2,8 +2,6 @@ package types
 
 import (
 	"time"
-
-	"github.com/blacktop/go-macho/types"
 )
 
 type volFlag uint64
@@ -140,7 +138,7 @@ type ApfsSuperblockT struct {
 	TotalBlockAlloced uint64
 	TotalBlocksFreed  uint64
 
-	VolumeUUID  types.UUID
+	VolumeUUID  UUID
 	LastModTime EpochTime
 
 	FsFlags volFlag

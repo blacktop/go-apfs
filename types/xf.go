@@ -3,8 +3,6 @@ package types
 import (
 	"encoding/hex"
 	"fmt"
-
-	"github.com/blacktop/go-macho"
 )
 
 //go:generate stringer -type=xfType,xfFlag -output xf_string.go
@@ -83,7 +81,7 @@ func (f Xfield) String() string {
 	case INO_EXT_TYPE_DIR_STATS_KEY:
 		return f.Field.(j_dir_stats_val_t).String()
 	case INO_EXT_TYPE_FS_UUID:
-		return f.Field.(macho.UUID).UUID.String()
+		return f.Field.(UUID).String()
 	case INO_EXT_TYPE_SPARSE_BYTES:
 		return fmt.Sprintf("sparse_bytes=%d", f.Field.(uint64))
 	case INO_EXT_TYPE_RDEV:

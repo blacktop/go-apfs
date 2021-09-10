@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/apex/log"
-	"github.com/blacktop/go-macho"
 )
 
 const (
@@ -562,7 +561,7 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 							Field:     dirStats,
 						})
 					case INO_EXT_TYPE_FS_UUID:
-						var uuid macho.UUID
+						var uuid UUID
 						if err := binary.Read(r, binary.LittleEndian, &uuid); err != nil {
 							return fmt.Errorf("failed to read xfield %T: %v", uuid, err)
 						}
@@ -763,7 +762,7 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 							Field:     dirStats,
 						})
 					case INO_EXT_TYPE_FS_UUID:
-						var uuid macho.UUID
+						var uuid UUID
 						if err := binary.Read(r, binary.LittleEndian, &uuid); err != nil {
 							return fmt.Errorf("failed to read xfield %T: %v", uuid, err)
 						}

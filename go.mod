@@ -4,7 +4,6 @@ go 1.17
 
 require (
 	github.com/apex/log v1.9.0
-	github.com/blacktop/go-macho v1.1.46
 	github.com/blacktop/go-plist v1.0.0
 	github.com/blacktop/lzfse-cgo v1.1.16
 	github.com/dustin/go-humanize v1.0.0
