@@ -75,19 +75,19 @@ jobs:
         name: Upload assets
         uses: actions/upload-artifact@v2
         with:
-          name: disass_macos
+          name: apfs_macos
           path: dist/*
       -
         if: matrix.platform == 'macos-latest'
         name: Upload assets
         uses: actions/upload-artifact@v2
         with:
-          name: disass_linux
+          name: apfs_linux
           path: dist/*
       -
         if: matrix.platform == 'windows-latest'
         name: Upload assets
         uses: actions/upload-artifact@v2
         with:
-          name: disass.exe
+          name: apfs.exe
           path: dist/*
