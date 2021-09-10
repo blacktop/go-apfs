@@ -7,3 +7,13 @@
 ---
 
 Originally from this [ipsw branch](https://github.com/blacktop/ipsw/tree/feature/apfs-parser)
+
+## Install
+
+```bash
+go get github.com/blacktop/go-apfs
+```
+
+## License
+
+Apache 2.0 Copyright (c) 2021 **blacktop**
