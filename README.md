@@ -14,17 +14,15 @@ Originally from this [ipsw branch](https://github.com/blacktop/ipsw/tree/feature
 go get github.com/blacktop/go-apfs
 ```
 
-## `apfs` CLI util
+### `apfs` CLI util
 
-### Install
+Install
 
 ```bash
 go install github.com/blacktop/go-apfs/cmd/apfs
 ```
 
 > OR download from [Releases](https://github.com/blacktop/go-apfs/releases/latest)
-
-### Usage
 
 #### List files
 
