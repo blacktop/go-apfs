@@ -42,8 +42,8 @@ jobs:
           distribution: goreleaser
           version: latest
           args: build --rm-dist --skip-validate --single-target
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # env:
+        #   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       - name: What is SDK (macOS)

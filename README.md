@@ -24,6 +24,14 @@ go install github.com/blacktop/go-apfs/cmd/apfs
 
 > OR download from [Releases](https://github.com/blacktop/go-apfs/releases/latest)
 
+Build
+
+```bash
+git clone https://github.com/blacktop/go-apfs.git
+cd go-apfs
+make build
+```
+
 #### List files
 
 Extract filesystem DMG from IPSW

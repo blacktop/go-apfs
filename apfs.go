@@ -68,7 +68,6 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 	var err error
 
 	a := new(APFS)
-	// sr := io.NewSectionReader(r, 0, 1<<63-1)
 	a.r = r
 
 	a.nxsb, err = types.ReadObj(r, 0)
@@ -104,6 +103,7 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 		"flag":     a.Container.OMap.Hdr.GetFlag(),
 	}).Debug("Object Map")
 
+	log.Debug("Parsing Checkpoint Description")
 	if err := a.getValidCSB(); err != nil {
 		return nil, fmt.Errorf("failed to find the container superblock that has the largest transaction identifier and isnʼt malformed: %v", err)
 	}
@@ -156,9 +156,6 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 
 // getValidCSB returns the container superblock that has the largest transaction identifier and isnʼt malformed
 func (a *APFS) getValidCSB() error {
-	log.Debug("Parsing Checkpoint Description")
-
-	// sr := io.NewSectionReader(a.r, 0, 1<<63-1)
 
 	nxsb := a.nxsb.Body.(types.NxSuperblock)
 
