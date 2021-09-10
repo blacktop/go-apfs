@@ -19,9 +19,9 @@ build: ## Build apfs locally
 
 .PHONY: test
 test: build ## Test apfs (list root dir on APFS_DMG)
-ifndef APFS_DMG
-$(error APFS_DMG variable is not set)
-endif
+	ifndef APFS_DMG
+		$(error APFS_DMG variable is not set)
+	endif
 	@echo " > Listing ROOT dir"
 	@$(PWD)/apfs.${CUR_VERSION} ls ${APFS_DMG}
 
