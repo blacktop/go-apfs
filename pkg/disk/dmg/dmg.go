@@ -21,6 +21,7 @@ import (
 
 	// "github.com/blacktop/ipsw/pkg/lzfse"
 	lzfse "github.com/blacktop/lzfse-cgo"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 )
@@ -37,6 +38,9 @@ type DMG struct {
 	firstAPFSPartition  int
 	apfsPartitionOffset uint64
 	apfsPartitionSize   uint64
+
+	cache        *lru.Cache
+	evictCounter uint64
 
 	sr     *io.SectionReader
 	closer io.Closer
@@ -482,18 +486,21 @@ func (d *DMG) GetBlock(name string) (*UDIFBlockData, error) {
 func (d *DMG) Load() error {
 
 	var out bytes.Buffer
-	var g gpt.GUIDPartitionTable
+
+	w := bufio.NewWriter(&out)
 
 	block, err := d.GetBlock("Primary GPT Header")
 	if err != nil {
 		return fmt.Errorf("failed to load and verify GPT: %w", err)
 	}
-	w := bufio.NewWriter(&out)
-	if err := block.DecompressChunks(w); err != nil {
-		return fmt.Errorf("failed to load and verify GPT: %w", err)
-	}
-	w.Flush()
 
+	for i, chunk := range block.Chunks {
+		if _, err := chunk.DecompressChunk(d.sr, w); err != nil {
+			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
+		}
+	}
+
+	var g gpt.GUIDPartitionTable
 	if err := binary.Read(bytes.NewReader(out.Bytes()), binary.LittleEndian, &g.Header); err != nil {
 		return fmt.Errorf("failed to read %T: %w", g.Header, err)
 	}
@@ -507,10 +514,11 @@ func (d *DMG) Load() error {
 		return fmt.Errorf("failed to load and verify GPT: %w", err)
 	}
 
-	if err := block.DecompressChunks(w); err != nil {
-		return fmt.Errorf("failed to load and verify GPT: %w", err)
+	for i, chunk := range block.Chunks {
+		if _, err := chunk.DecompressChunk(d.sr, w); err != nil {
+			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
+		}
 	}
-	w.Flush()
 
 	g.Partitions = make([]gpt.Partition, g.Header.EntriesCount)
 	if err := binary.Read(bytes.NewReader(out.Bytes()), binary.LittleEndian, &g.Partitions); err != nil {
@@ -525,14 +533,23 @@ func (d *DMG) Load() error {
 				if block.udifBlockData.StartSector == part.StartingLBA {
 					found = true
 					d.firstAPFSPartition = i
+					// setup sector cache
+					d.cache, err = lru.NewWithEvict(int(block.BuffersNeeded), func(k interface{}, v interface{}) {
+						if k != v {
+							log.Fatalf("cache failure: evict values not equal (%v!=%v)", k, v)
+						}
+						d.evictCounter++
+					})
+					if err != nil {
+						return fmt.Errorf("failed to initialize DMG read cache: %w", err)
+					}
 				}
 			}
 			// Get partition offset and size
 			d.apfsPartitionOffset = part.StartingLBA * sectorSize
-			d.apfsPartitionSize = (part.EndingLBA - part.StartingLBA) * sectorSize
+			d.apfsPartitionSize = (part.EndingLBA - part.StartingLBA + 1) * sectorSize
 		}
 	}
-
 	if !found {
 		return fmt.Errorf("failed to find Apple_APFS partition in DMG")
 	}
@@ -546,17 +563,18 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 	var (
 		beg int
 		mid int
-		end int
 
 		rdOffs int64
 		rdSize int64
 
-		entryIdx int
+		cbuf bytes.Buffer
 	)
 
-	w := bufio.NewWriter(bytes.NewBuffer(buf))
-
+	off += int64(d.apfsPartitionOffset) // map offset into start of Apple_APFS partition
 	length := int64(len(buf))
+
+	entryIdx := len(d.Blocks[d.firstAPFSPartition].Chunks)
+	end := entryIdx - 1
 
 	for beg <= end {
 		mid = (beg + end) / 2
@@ -574,6 +592,22 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 	if int(entryIdx) == len(d.Blocks[d.firstAPFSPartition].Chunks)-1 {
 		return n, fmt.Errorf("entryIdx == d.Blocks[d.firstAPFSPartition].Chunks ")
 	}
+
+	if val, found := d.cache.Get(entryIdx); found {
+		cbuf = val.(bytes.Buffer)
+
+		r := bytes.NewReader(cbuf.Bytes())
+
+		r.Seek(off-int64(d.Blocks[d.firstAPFSPartition].Chunks[entryIdx].DiskOffset), io.SeekStart)
+
+		if err := binary.Read(r, binary.LittleEndian, &buf); err != nil {
+			return n, fmt.Errorf("failed to fill buffer with cache buffer: %w", err)
+		}
+
+		return n, nil
+	}
+
+	w := bufio.NewWriter(&cbuf)
 
 	for length > 0 {
 
@@ -596,11 +630,22 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 		}
 
 		n += rdSize
-		off += int64(rdSize)
 		length -= int64(rdSize)
 		entryIdx++
 	}
+
 	w.Flush()
+
+	r := bytes.NewReader(cbuf.Bytes())
+
+	r.Seek(off-int64(d.Blocks[d.firstAPFSPartition].Chunks[entryIdx-1].DiskOffset), io.SeekStart)
+
+	if err := binary.Read(r, binary.LittleEndian, &buf); err != nil {
+		return n, fmt.Errorf("failed to fill buffer with cache buffer: %w", err)
+	}
+
+	d.cache.Add(entryIdx-1, cbuf)
+
 	return n, nil
 }
 
@@ -664,7 +709,14 @@ func NewDMG(r *os.File) (*DMG, error) {
 		for i := 0; i < int(bdata.udifBlockData.ChunkCount); i++ {
 			var chunk udifBlockChunk
 			binary.Read(r, binary.BigEndian, &chunk)
-			bdata.Chunks = append(bdata.Chunks, chunk)
+			bdata.Chunks = append(bdata.Chunks, udifBlockChunk{
+				Type:             chunk.Type,
+				Comment:          chunk.Comment,
+				DiskOffset:       (chunk.DiskOffset + bdata.StartSector) * sectorSize,
+				DiskLength:       chunk.DiskLength * sectorSize,
+				CompressedOffset: chunk.CompressedOffset + bdata.DataOffset,
+				CompressedLength: chunk.CompressedLength,
+			})
 		}
 
 		d.Blocks = append(d.Blocks, bdata)

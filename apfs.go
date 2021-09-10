@@ -93,7 +93,7 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 		"sub_type": a.nxsb.Hdr.GetSubType(),
 		"flag":     a.nxsb.Hdr.GetFlag(),
 		"magic":    a.Container.Magic.String(),
-	}).Debug("APFS Container")
+	}).Info("APFS Container")
 
 	log.WithFields(log.Fields{
 		"checksum": fmt.Sprintf("%#x", a.Container.OMap.Hdr.Checksum()),
@@ -102,7 +102,7 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 		"xid":      fmt.Sprintf("%#x", a.Container.OMap.Hdr.Xid),
 		"sub_type": a.Container.OMap.Hdr.GetSubType(),
 		"flag":     a.Container.OMap.Hdr.GetFlag(),
-	}).Debug("Object Map")
+	}).Info("Object Map")
 
 	if err := a.getValidCSB(); err != nil {
 		return nil, fmt.Errorf("failed to find the container superblock that has the largest transaction identifier and isnʼt malformed: %v", err)
