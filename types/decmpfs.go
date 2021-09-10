@@ -170,6 +170,7 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 				}
 				n, err = decomp.ReadFrom(zr)
 				if err != nil {
+					// log.Errorf("failed to read from zlib reader: %v", err)
 					return fmt.Errorf("failed to read from zlib reader: %w", err)
 				}
 				zr.Close()

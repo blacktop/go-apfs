@@ -1,6 +1,6 @@
 # NOTES
 
-## APFS
+## APFS Research
 
 - https://developer.apple.com/support/downloads/Apple-File-System-Reference.pdf
 - https://github.com/ydkhatri/mac_apt/blob/master/extract_apfs_fs.py
@@ -16,7 +16,3 @@
 - http://newosxbook.com/files/APFS.pdf
 - http://docs.macsysadmin.se/2018/video/Day4Session2.mp4
 - https://blog.cugu.eu/post/apfs/
-
-## Credit
-
-- https://github.com/jivanpal/drat

@@ -4,6 +4,8 @@ CLI=github.com/blacktop/go-apfs/cmd/apfs
 CUR_VERSION=$(shell svu current)
 NEXT_VERSION=$(shell svu patch)
 
+APFS_DMG:=
+
 
 .PHONY: build-deps
 build-deps: ## Install the build dependencies
@@ -16,13 +18,17 @@ build: ## Build apfs locally
 	CGO_ENABLED=1 go build -o apfs.${CUR_VERSION} ./cmd/apfs
 
 .PHONY: test
-test: build ## Test disass on hello-mte
-	@apfs list $(APFS_CONTAINER) /
+test: build ## Test apfs (list root dir on APFS_DMG)
+ifndef APFS_DMG
+$(error APFS_DMG variable is not set)
+endif
+	@echo " > Listing ROOT dir"
+	@$(PWD)/apfs.${CUR_VERSION} ls ${APFS_DMG}
 
 .PHONY: dry_release
 dry_release: ## Run goreleaser without releasing/pushing artifacts to github
 	@echo " > Creating Pre-release Build ${NEXT_VERSION}"
-	@goreleaser build --rm-dist --skip-validate --snapshot -f .goreleaser.mac.yml
+	@goreleaser build --rm-dist --skip-validate --single-target
 
 .PHONY: release
 release: ## Create a new release from the NEXT_VERSION
@@ -38,7 +44,7 @@ destroy: ## Remove release for the CUR_VERSION
 clean: ## Clean up artifacts
 	@echo " > Cleaning"
 	rm -rf dist
-	rm disass.v* || true
+	rm apfs.v* || true
 
 # Absolutely awesome: http://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 help:

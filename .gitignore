@@ -19,3 +19,4 @@
 __debug_bin
 dist/
 apfs.*
+dyld_shared_cache*
