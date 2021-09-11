@@ -14,7 +14,7 @@ Originally from this [ipsw branch](https://github.com/blacktop/ipsw/tree/feature
 go get github.com/blacktop/go-apfs
 ```
 
-### `apfs` CLI util
+### `apfs` *CLI*
 
 Install
 
