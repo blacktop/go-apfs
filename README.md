@@ -79,6 +79,10 @@ DT_REG - Fri Jun  4 02:54:21 MDT 2021 - .file
 -rwxr-xr-x  1 blacktop  staff   1.4G Sep  9 23:56 dyld_shared_cache_arm64e
 ```
 
+## Spec
+
+Supports up to version **2020-06-22** of the [specification](https://developer.apple.com/support/downloads/Apple-File-System-Reference.pdf)
+
 ## License
 
 Apache 2.0 Copyright (c) 2021 **blacktop**
