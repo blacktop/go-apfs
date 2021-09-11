@@ -108,7 +108,7 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 		return nil, fmt.Errorf("failed to find the container superblock that has the largest transaction identifier and isnʼt malformed: %v", err)
 	}
 
-	if len(a.Valid.OMap.Body.(types.OMap).Tree.Body.(types.BTreeNodePhys).Entries) == 1 {
+	if len(a.Valid.OMap.Body.(types.OMap).Tree.Body.(types.BTreeNodePhys).Entries) == 1 { // TODO: could be more than 1 for non IPSW APFS volumes?
 		if entry, ok := a.Valid.OMap.Body.(types.OMap).Tree.Body.(types.BTreeNodePhys).Entries[0].(types.OMapNodeEntry); ok {
 			a.volume, err = types.ReadObj(r, uint64(entry.Val.Paddr))
 			if err != nil {
@@ -396,11 +396,12 @@ func (a *APFS) Copy(src, dest string) error {
 	var tot int
 	if compressed {
 		w := bufio.NewWriter(fo)
-		if err := types.DecompressFile(io.NewSectionReader(sr, int64(physBlockNum*types.BLOCK_SIZE), int64(length)), w, decmpfsHdr); err != nil {
+		if err := decmpfsHdr.DecompressFile(a.r, w, physBlockNum, length); err != nil {
 			return err
 		}
-		w.Flush()
-		fmt.Printf("TOTAL: %d, length: %d, TOT_W: %d\n", tot, length, uncompressedSize)
+		if info, err := fo.Stat(); err == nil {
+			fmt.Printf("file_size: %d, uncompressedSize:%d", info.Size(), uncompressedSize)
+		}
 	} else {
 		// dat := make([]byte, totalBytesWritten)
 		dat := make([]byte, types.BLOCK_SIZE)

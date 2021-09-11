@@ -135,7 +135,9 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 
 	block := make([]byte, BLOCK_SIZE)
 
-	_, err = r.ReadAt(block, int64(blockAddr*BLOCK_SIZE))
+	if _, err := r.ReadAt(block, int64(blockAddr*BLOCK_SIZE)); err != nil {
+		return nil, fmt.Errorf("failed to read object block data at block address %#x: %v", blockAddr, err)
+	}
 
 	if !VerifyChecksum(block) {
 		return nil, fmt.Errorf("obj_phys_t data block failed checksum validation: %w", ErrBadBlockChecksum)

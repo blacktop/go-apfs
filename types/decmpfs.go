@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/apex/log"
 	lzfse "github.com/blacktop/lzfse-cgo"
 )
 
@@ -103,6 +104,7 @@ type CmpfEnd struct {
 	Unk4  uint32
 }
 
+// GetDecmpfsHeader parses the  decmpfs header from an xattr node entry
 func GetDecmpfsHeader(ne NodeEntry) (*DecmpfsDiskHeader, error) {
 	var hdr DecmpfsDiskHeader
 	if ne.Hdr.GetType() == APFS_TYPE_XATTR {
@@ -117,30 +119,31 @@ func GetDecmpfsHeader(ne NodeEntry) (*DecmpfsDiskHeader, error) {
 }
 
 // DecompressFile decompresses decmpfs data
-func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskHeader) error {
+func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, blockAddr, length uint64) error {
 
-	switch hdr.CompressionType {
+	sr := io.NewSectionReader(r, int64(blockAddr*BLOCK_SIZE), int64(length))
+
+	switch h.CompressionType {
 	case CMP_ATTR_ZLIB:
 		panic("CMP_ATTR_ZLIB not supported (need to figure out where to grab compressed data from)")
 	case CMP_RSRC_ZLIB:
 		var rsrcHdr CmpfRsrcHead
-		if err := binary.Read(r, binary.BigEndian, &rsrcHdr); err != nil {
+		if err := binary.Read(sr, binary.BigEndian, &rsrcHdr); err != nil {
 			return err
 		}
 
-		nn, e := r.Seek(int64(rsrcHdr.HeaderSize), io.SeekStart)
-		fmt.Printf("n: %d, e: %w\n", nn, e)
+		sr.Seek(int64(rsrcHdr.HeaderSize), io.SeekStart)
 
 		var blkHdr CmpfRsrcBlockHead
-		if err := binary.Read(r, binary.BigEndian, &blkHdr.DataSize); err != nil {
+		if err := binary.Read(sr, binary.BigEndian, &blkHdr.DataSize); err != nil {
 			return err
 		}
-		if err := binary.Read(r, binary.LittleEndian, &blkHdr.NumBlocks); err != nil {
+		if err := binary.Read(sr, binary.LittleEndian, &blkHdr.NumBlocks); err != nil {
 			return err
 		}
 
 		blocks := make([]cmpfRsrcBlock, blkHdr.NumBlocks)
-		if err := binary.Read(r, binary.LittleEndian, &blocks); err != nil {
+		if err := binary.Read(sr, binary.LittleEndian, &blocks); err != nil {
 			return err
 		}
 
@@ -155,11 +158,11 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 		}
 		buff := make([]byte, 0, max)
 
-		for _, blk := range blocks {
-			r.Seek(int64(rsrcHdr.HeaderSize+blk.Offset+4), io.SeekStart)
+		for idx, blk := range blocks {
+			sr.Seek(int64(rsrcHdr.HeaderSize+blk.Offset+4), io.SeekStart)
 
 			buff = buff[:blk.Size]
-			if err := binary.Read(r, binary.LittleEndian, &buff); err != nil {
+			if err := binary.Read(sr, binary.LittleEndian, &buff); err != nil {
 				return err
 			}
 
@@ -170,19 +173,20 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 				}
 				n, err = decomp.ReadFrom(zr)
 				if err != nil {
-					// log.Errorf("failed to read from zlib reader: %v", err)
-					return fmt.Errorf("failed to read from zlib reader: %w", err)
+					return fmt.Errorf("failed to read from zlib reader for block %d: %w", idx, err)
 				}
 				zr.Close()
+				log.Debugf("Wrote %#x bytes of CMP_RSRC_ZLIB data", n)
 				total += n
 			} else if (buff[0] & 0x0F) == 0x0F { // uncompressed block
 				nn, err := decomp.Write(buff[1:])
 				if err != nil {
 					return fmt.Errorf("failed to write uncompressed block: %w", err)
 				}
+				log.Debugf("Wrote %#x bytes of CMP_RSRC_ZLIB (uncompressed) data", n)
 				total += int64(nn)
 			} else {
-				return fmt.Errorf("found unknown chunk type data in resource fork compressed data")
+				return fmt.Errorf("found unknown chunk type data in resource fork compressed data for block %d", idx)
 			}
 		}
 		// var footer CmpfEnd
@@ -195,22 +199,22 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 		fallthrough
 	case CMP_RSRC_LZFSE:
 		var rsrcHdr CmpfRsrcHead
-		if err := binary.Read(r, binary.BigEndian, &rsrcHdr); err != nil {
+		if err := binary.Read(sr, binary.BigEndian, &rsrcHdr); err != nil {
 			return err
 		}
 
-		r.Seek(int64(rsrcHdr.HeaderSize), io.SeekStart)
+		sr.Seek(int64(rsrcHdr.HeaderSize), io.SeekStart)
 
 		var blkHdr CmpfRsrcBlockHead
-		if err := binary.Read(r, binary.BigEndian, &blkHdr.DataSize); err != nil {
+		if err := binary.Read(sr, binary.BigEndian, &blkHdr.DataSize); err != nil {
 			return err
 		}
-		if err := binary.Read(r, binary.LittleEndian, &blkHdr.NumBlocks); err != nil {
+		if err := binary.Read(sr, binary.LittleEndian, &blkHdr.NumBlocks); err != nil {
 			return err
 		}
 
 		blocks := make([]cmpfRsrcBlock, blkHdr.NumBlocks)
-		if err := binary.Read(r, binary.LittleEndian, &blocks); err != nil {
+		if err := binary.Read(sr, binary.LittleEndian, &blocks); err != nil {
 			return err
 		}
 
@@ -226,18 +230,18 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 		}
 		buff := make([]byte, 0, max)
 
-		for _, blk := range blocks {
-			r.Seek(int64(rsrcHdr.HeaderSize+blk.Offset+4), io.SeekStart)
+		for idx, blk := range blocks {
+			sr.Seek(int64(rsrcHdr.HeaderSize+blk.Offset+4), io.SeekStart)
 
 			buff = buff[:blk.Size]
-			if err := binary.Read(r, binary.LittleEndian, &buff); err != nil {
+			if err := binary.Read(sr, binary.LittleEndian, &buff); err != nil {
 				return err
 			}
 
 			if buff[0] == 0x78 { // lzvn block
 				n, err = decomp.Write(lzfse.DecodeBuffer(buff))
 				if err != nil {
-					return err
+					return fmt.Errorf("failed to write from lzvn/lzfse decoder for block %d: %w", idx, err)
 				}
 			} else if buff[0] == 0x06 { // uncompressed block TODO: make sure this is the same for lzvn AND lzfse
 				n, err = decomp.Write(buff[1:])
@@ -245,7 +249,7 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 					return err
 				}
 			} else {
-				return fmt.Errorf("found unknown chunk type data in resource fork compressed data")
+				return fmt.Errorf("found unknown chunk type data in resource fork compressed data for block %d", idx)
 			}
 			total += n
 		}
@@ -254,7 +258,7 @@ func DecompressFile(r *io.SectionReader, decomp *bufio.Writer, hdr *DecmpfsDiskH
 		// 	return err
 		// }
 	default:
-		return fmt.Errorf("unknown compression type: %s", hdr.CompressionType)
+		return fmt.Errorf("unknown compression type: %s", h.CompressionType)
 	}
 
 	return nil
