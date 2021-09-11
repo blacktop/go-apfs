@@ -15,6 +15,7 @@ import (
 	"github.com/blacktop/go-apfs/pkg/adc"
 	"github.com/blacktop/go-apfs/pkg/disk/gpt"
 	"github.com/blacktop/go-apfs/types"
+	"github.com/blacktop/go-plist"
 
 	lzfse "github.com/blacktop/lzfse-cgo"
 	lru "github.com/hashicorp/golang-lru"
