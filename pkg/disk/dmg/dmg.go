@@ -40,8 +40,15 @@ type DMG struct {
 	cache        *lru.Cache
 	evictCounter uint64
 
+	config Config
+
 	sr     *io.SectionReader
 	closer io.Closer
+}
+
+// Config is the DMG config
+type Config struct {
+	DisableCache bool
 }
 
 type block struct {
@@ -433,7 +440,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, w *bufio.Write
 }
 
 // Open opens the named file using os.Open and prepares it for use as a dmg.
-func Open(name string) (*DMG, error) {
+func Open(name string, c *Config) (*DMG, error) {
 	f, err := os.Open(name)
 	if err != nil {
 		return nil, err
@@ -442,6 +449,9 @@ func Open(name string) (*DMG, error) {
 	if err != nil {
 		f.Close()
 		return nil, err
+	}
+	if c != nil {
+		ff.config = *c
 	}
 	if err := ff.Load(); err != nil {
 		return nil, err
@@ -596,7 +606,7 @@ func (d *DMG) Load() error {
 		return fmt.Errorf("failed to load and verify GPT: %w", err)
 	}
 
-	// Find first APFS partition
+	// find first APFS partition
 	found := false
 	for _, part := range g.Partitions {
 		if part.Type.String() == gpt.Apple_APFS {
@@ -607,9 +617,6 @@ func (d *DMG) Load() error {
 					d.maxChunkSize = block.maxChunkSize()
 					// setup sector cache
 					d.cache, err = lru.NewWithEvict(int(block.BuffersNeeded), func(k interface{}, v interface{}) {
-						if k != v {
-							log.Fatalf("cache failure: evict values not equal (%v!=%v)", k, v)
-						}
 						log.Warn("evicted item from DMG read cache (maybe we should increase it)")
 						d.evictCounter++
 					})
@@ -683,14 +690,16 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 			rdSize = int64(sect.DiskLength) - rdOffs
 		}
 
-		// check the cache
-		if val, found := d.cache.Get(entryIdx); found {
-			if _, err = ckw.Write(val.([]byte)); err != nil {
-				return -1, fmt.Errorf("failed to write cached chunk data to writer")
+		if !d.config.DisableCache {
+			// check the cache
+			if val, found := d.cache.Get(entryIdx); found {
+				if _, err = ckw.Write(val.([]byte)); err != nil {
+					return -1, fmt.Errorf("failed to write cached chunk data to writer")
+				}
+				length -= int64(rdSize)
+				entryIdx++
+				continue
 			}
-			length -= int64(rdSize)
-			entryIdx++
-			continue
 		}
 
 		_, err := sect.DecompressChunk(d.sr, dcw)
@@ -700,10 +709,13 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 
 		// write decompressed chunk bytes to chunks buffer
 		ckw.Write(dec.Bytes())
-		// cache decompressed chunk data
-		d.cache.Add(entryIdx, dec.Bytes())
-		// reset decompressed data (for next chunk) // FIXME: do we need to do this?
-		dec.Reset()
+
+		if !d.config.DisableCache {
+			// cache decompressed chunk data
+			d.cache.Add(entryIdx, dec.Bytes())
+			// reset decompressed data (for next chunk) // FIXME: do we need to do this?
+			dec.Reset()
+		}
 
 		length -= int64(rdSize)
 		entryIdx++
@@ -712,8 +724,6 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 	r := bytes.NewReader(chkbuf.Bytes())
 
 	r.Seek(off-int64(apfsChunks[mid].DiskOffset), io.SeekStart)
-
-	// log.Debug(hex.Dump(cbuf.Bytes()[off-int64(apfsChunks[mid].DiskOffset) : off-int64(apfsChunks[mid].DiskOffset)+10]))
 
 	if err := binary.Read(r, binary.LittleEndian, &buf); err != nil {
 		return n, fmt.Errorf("failed to fill input buffer with processed chunk data: %w", err)

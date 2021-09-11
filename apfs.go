@@ -320,6 +320,8 @@ func (a *APFS) Tree(path string) error {
 // Copy copies the contents of the src file to the dest file TODO: finish this
 func (a *APFS) Copy(src, dest string) error {
 
+	var decmpfsHdr *types.DecmpfsDiskHeader
+
 	sr := io.NewSectionReader(a.r, 0, 1<<63-1)
 
 	rec, err := a.find(src)
@@ -327,23 +329,17 @@ func (a *APFS) Copy(src, dest string) error {
 		return err
 	}
 
-	var decmpfsHdr *types.DecmpfsDiskHeader
-
-	// decmpfsHdr, err = types.GetDecmpfsHeader(*rec)
-	// if err != nil {
-	// 	return err
-	// }
-
 	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 	if err != nil {
 		return err
 	}
 
-	compressed := false
 	var length uint64
 	var uncompressedSize uint64
 	var totalBytesWritten uint64
 	var physBlockNum uint64
+
+	compressed := false
 
 	for _, rec := range fsRecords {
 		fmt.Println(rec)
@@ -400,19 +396,47 @@ func (a *APFS) Copy(src, dest string) error {
 			return err
 		}
 		if info, err := fo.Stat(); err == nil {
-			fmt.Printf("file_size: %d, uncompressedSize:%d", info.Size(), uncompressedSize)
-		}
-	} else {
-		// dat := make([]byte, totalBytesWritten)
-		dat := make([]byte, types.BLOCK_SIZE)
-		for i, blockAddr := uint64(0), physBlockNum; i < length/types.BLOCK_SIZE; i, blockAddr = i+1, blockAddr+1 {
-			_, err = a.r.ReadAt(dat, int64(blockAddr*types.BLOCK_SIZE))
-			if n, err := fo.Write(dat); err != nil {
-				return err
-			} else {
-				tot += n
+			if info.Size() != int64(uncompressedSize) {
+				log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), uncompressedSize)
 			}
 		}
+	} else {
+		// // initialize progress bar
+		// p := mpb.New(mpb.WithWidth(80))
+		// // adding a single bar, which will inherit container's width
+		// bar := p.Add(int64(length/types.BLOCK_SIZE),
+		// 	// progress bar filler with customized style
+		// 	mpb.NewBarFiller(mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("|")),
+		// 	mpb.PrependDecorators(
+		// 		decor.Name("     ", decor.WC{W: len("     ") + 1, C: decor.DidentRight}),
+		// 		// replace ETA decorator with "done" message, OnComplete event
+		// 		decor.OnComplete(
+		// 			decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 4}), "✅ ",
+		// 		),
+		// 	),
+		// 	mpb.AppendDecorators(decor.Percentage()),
+		// )
+
+		dat := make([]byte, totalBytesWritten)
+		// dat := make([]byte, types.BLOCK_SIZE)
+		// for i, blockAddr := uint64(0), physBlockNum; i < length/types.BLOCK_SIZE; i, blockAddr = i+1, blockAddr+1 {
+		// _, err = a.r.ReadAt(dat, int64(blockAddr*types.BLOCK_SIZE))
+		_, err = a.r.ReadAt(dat, int64(physBlockNum*types.BLOCK_SIZE))
+		if err != nil {
+			return fmt.Errorf("failed to read file data")
+		}
+		tot, err = fo.Write(dat)
+		if err != nil {
+			return fmt.Errorf("failed to write file data")
+		}
+		// 	tot += types.BLOCK_SIZE
+		// 	if totalBytesWritten-tot < types.BLOCK_SIZE {
+		// 		dat = dat[:totalBytesWritten-tot]
+		// 	}
+		// 	bar.Increment()
+		// }
+		// wait for our bar to complete and flush
+		// p.Wait()
 		fmt.Printf("TOTAL: %d, length: %d, TOT_W: %d\n", tot, length, totalBytesWritten)
 	}
 

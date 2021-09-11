@@ -43,7 +43,7 @@ var lsCmd = &cobra.Command{
 
 		dmgPath := filepath.Clean(args[0])
 
-		dev, err := dmg.Open(dmgPath)
+		dev, err := dmg.Open(dmgPath, nil)
 		if err != nil {
 			return err
 		}
