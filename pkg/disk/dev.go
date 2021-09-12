@@ -1,6 +1,7 @@
 package disk
 
 import (
+	"bufio"
 	"io"
 )
 
@@ -8,6 +9,7 @@ import (
 type Device interface {
 	io.ReaderAt
 	io.Closer
+	ReadFile(w *bufio.Writer, off, length int64) error
 	GetSize() uint64
 }
 

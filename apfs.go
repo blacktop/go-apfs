@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/apex/log"
+	"github.com/blacktop/go-apfs/pkg/disk"
 	"github.com/blacktop/go-apfs/types"
 )
 
@@ -26,6 +27,7 @@ type APFS struct {
 	volume          *types.Obj
 	fsOMapBtree     *types.BTreeNodePhys
 
+	dev    disk.Device
 	r      io.ReaderAt
 	closer io.Closer
 }
@@ -63,14 +65,15 @@ func init() {
 
 // NewAPFS creates a new APFS for accessing a apple filesystem container or file in an underlying reader.
 // The apfs is expected to start at position 0 in the ReaderAt.
-func NewAPFS(r io.ReaderAt) (*APFS, error) {
+func NewAPFS(dev disk.Device) (*APFS, error) {
 
 	var err error
 
 	a := new(APFS)
-	a.r = r
+	a.dev = dev
+	a.r = dev
 
-	a.nxsb, err = types.ReadObj(r, 0)
+	a.nxsb, err = types.ReadObj(a.r, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read APFS container: %w", err)
 	}
@@ -110,7 +113,7 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 
 	if len(a.Valid.OMap.Body.(types.OMap).Tree.Body.(types.BTreeNodePhys).Entries) == 1 { // TODO: could be more than 1 for non IPSW APFS volumes?
 		if entry, ok := a.Valid.OMap.Body.(types.OMap).Tree.Body.(types.BTreeNodePhys).Entries[0].(types.OMapNodeEntry); ok {
-			a.volume, err = types.ReadObj(r, uint64(entry.Val.Paddr))
+			a.volume, err = types.ReadObj(a.r, uint64(entry.Val.Paddr))
 			if err != nil {
 				return nil, fmt.Errorf("failed to read APFS omap.tree.entry.omap (volume): %v", err)
 			}
@@ -135,14 +138,14 @@ func NewAPFS(r io.ReaderAt) (*APFS, error) {
 		a.fsOMapBtree = &ombtree
 	}
 
-	fsRootEntry, err := a.fsOMapBtree.GetOMapEntry(r, a.Volume.RootTreeOid, a.volume.Hdr.Xid)
+	fsRootEntry, err := a.fsOMapBtree.GetOMapEntry(a.r, a.Volume.RootTreeOid, a.volume.Hdr.Xid)
 	if err != nil {
 		return nil, err
 	}
 
 	log.Debugf("File System Root Entry: %s", fsRootEntry)
 
-	fsRootBtreeObj, err := types.ReadObj(r, fsRootEntry.Val.Paddr)
+	fsRootBtreeObj, err := types.ReadObj(a.r, fsRootEntry.Val.Paddr)
 	if err != nil {
 		return nil, err
 	}
@@ -335,9 +338,9 @@ func (a *APFS) Copy(src, dest string) error {
 	}
 
 	var length uint64
+	var physBlockNum uint64
 	var uncompressedSize uint64
 	var totalBytesWritten uint64
-	var physBlockNum uint64
 
 	compressed := false
 
@@ -389,7 +392,6 @@ func (a *APFS) Copy(src, dest string) error {
 	}
 	defer fo.Close()
 
-	var tot int
 	if compressed {
 		w := bufio.NewWriter(fo)
 		if err := decmpfsHdr.DecompressFile(a.r, w, physBlockNum, length); err != nil {
@@ -401,43 +403,14 @@ func (a *APFS) Copy(src, dest string) error {
 			}
 		}
 	} else {
-		// // initialize progress bar
-		// p := mpb.New(mpb.WithWidth(80))
-		// // adding a single bar, which will inherit container's width
-		// bar := p.Add(int64(length/types.BLOCK_SIZE),
-		// 	// progress bar filler with customized style
-		// 	mpb.NewBarFiller(mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("|")),
-		// 	mpb.PrependDecorators(
-		// 		decor.Name("     ", decor.WC{W: len("     ") + 1, C: decor.DidentRight}),
-		// 		// replace ETA decorator with "done" message, OnComplete event
-		// 		decor.OnComplete(
-		// 			decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 4}), "✅ ",
-		// 		),
-		// 	),
-		// 	mpb.AppendDecorators(decor.Percentage()),
-		// )
-
-		dat := make([]byte, totalBytesWritten)
-		// dat := make([]byte, types.BLOCK_SIZE)
-		// for i, blockAddr := uint64(0), physBlockNum; i < length/types.BLOCK_SIZE; i, blockAddr = i+1, blockAddr+1 {
-		// _, err = a.r.ReadAt(dat, int64(blockAddr*types.BLOCK_SIZE))
-		_, err = a.r.ReadAt(dat, int64(physBlockNum*types.BLOCK_SIZE))
-		if err != nil {
-			return fmt.Errorf("failed to read file data")
+		if err := a.dev.ReadFile(bufio.NewWriter(fo), int64(physBlockNum*types.BLOCK_SIZE), int64(totalBytesWritten)); err != nil {
+			return fmt.Errorf("failed to write file data from device: %v", err)
 		}
-		tot, err = fo.Write(dat)
-		if err != nil {
-			return fmt.Errorf("failed to write file data")
+		if info, err := fo.Stat(); err == nil {
+			if info.Size() != int64(totalBytesWritten) {
+				log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), totalBytesWritten)
+			}
 		}
-		// 	tot += types.BLOCK_SIZE
-		// 	if totalBytesWritten-tot < types.BLOCK_SIZE {
-		// 		dat = dat[:totalBytesWritten-tot]
-		// 	}
-		// 	bar.Increment()
-		// }
-		// wait for our bar to complete and flush
-		// p.Wait()
-		fmt.Printf("TOTAL: %d, length: %d, TOT_W: %d\n", tot, length, totalBytesWritten)
 	}
 
 	return nil

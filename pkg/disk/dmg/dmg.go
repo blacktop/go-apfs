@@ -350,93 +350,77 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 }
 
 // DecompressChunk decompresses a given chunk and writes it to supplied bufio.Writer
-func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, w *bufio.Writer) (n int, err error) {
-
+func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out *bytes.Buffer) (n int, err error) {
+	var nn int64
 	switch chunk.Type {
 	case ZERO_FILL:
-		n, err = w.Write(make([]byte, chunk.CompressedLength))
-		if err != nil {
-			return
+		if n, err = out.Write(make([]byte, chunk.CompressedLength)); err != nil {
+			return -1, fmt.Errorf("failed to write ZERO_FILL data")
 		}
-		log.Debugf("Wrote %#x bytes of ZERO_FILL data", n)
+		log.Debugf("Wrote %#x bytes of ZERO_FILL out", n)
 	case UNCOMPRESSED:
-		buff := make([]byte, chunk.CompressedLength)
-		if _, err = r.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
-			return
+		if nn, err = out.ReadFrom(io.NewSectionReader(r, int64(chunk.CompressedOffset), int64(chunk.CompressedLength))); err != nil {
+			return -1, fmt.Errorf("failed to write UNCOMPRESSED data")
 		}
-		n, err = w.Write(buff)
-		if err != nil {
-			return
-		}
+		n = int(nn)
 		log.Debugf("Wrote %#x bytes of UNCOMPRESSED data", n)
 	case IGNORED:
-		n, err = w.Write(make([]byte, chunk.DiskLength*udifSectorSize))
-		if err != nil {
-			return
+		if n, err = out.Write(make([]byte, chunk.DiskLength*udifSectorSize)); err != nil {
+			return -1, fmt.Errorf("failed to write IGNORED data")
 		}
-		log.Debugf("Wrote %#x bytes of IGNORED data", n)
+		log.Debugf("Wrote %#x bytes of IGNORED outa", n)
 	case COMPRESS_ADC:
-		buff := make([]byte, chunk.DiskLength)
-		if _, err = r.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
+		in = in[:chunk.CompressedLength]
+		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
-		n, err = w.Write(adc.DecompressADC(buff))
-		if err != nil {
-			return
+		if n, err = out.Write(adc.DecompressADC(in)); err != nil {
+			return -1, fmt.Errorf("failed to write COMPRESS_ADC data")
 		}
 		log.Debugf("Wrote %#x bytes of COMPRESS_ADC data", n)
 	case COMPRESS_ZLIB:
-		buff := make([]byte, chunk.DiskLength)
-		if _, err = r.ReadAt(buff, int64(chunk.DiskOffset)); err != nil {
+		in = in[:chunk.CompressedLength]
+		if _, err = r.ReadAt(in, int64(chunk.DiskOffset)); err != nil {
 			return
 		}
-		var r io.ReadCloser
-		r, err = zlib.NewReader(bytes.NewReader(buff))
+		zr, err := zlib.NewReader(bytes.NewReader(in))
 		if err != nil {
-			return
+			return -1, fmt.Errorf("failed to create zlib reader")
 		}
-		var nn int64
-		nn, err = w.ReadFrom(r)
-		if err != nil {
-			return int(nn), err
+		defer zr.Close()
+		if nn, err = out.ReadFrom(zr); err != nil {
+			return -1, fmt.Errorf("failed to write COMPRESS_ZLIB data")
 		}
-		r.Close()
+		n = int(nn)
 		log.Debugf("Wrote %#x bytes of COMPRESS_ZLIB data", n)
 	case COMPRESSS_BZ2:
-		buff := make([]byte, chunk.DiskLength)
-		if _, err = r.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
+		in = in[:chunk.CompressedLength]
+		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
-		var nn int64
-		nn, err = w.ReadFrom(bzip2.NewReader(bytes.NewReader(buff)))
-		if err != nil {
-			return int(nn), err
+		if nn, err = out.ReadFrom(bzip2.NewReader(bytes.NewReader(in))); err != nil {
+			return -1, fmt.Errorf("failed to write COMPRESSS_BZ2 data")
 		}
+		n = int(nn)
 		log.Debugf("Wrote %#x bytes of COMPRESSS_BZ2 data", n)
 	case COMPRESSS_LZFSE:
-		buff := make([]byte, chunk.DiskLength)
-		if _, err = r.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
+		in = in[:chunk.CompressedLength]
+		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
-		n, err = w.Write(lzfse.DecodeBuffer(buff))
-		if err != nil {
-			return
+		if n, err = out.Write(lzfse.DecodeBuffer(in)); err != nil {
+			return -1, fmt.Errorf("failed to write COMPRESSS_LZFSE data")
 		}
 		log.Debugf("Wrote %#x bytes of COMPRESSS_LZFSE data", n)
 	case COMPRESSS_LZMA:
 		return n, fmt.Errorf("COMPRESSS_LZMA is currently unsupported")
 	case COMMENT: // TODO: how to parse comments?
 	case LAST_BLOCK:
-		if err = w.Flush(); err != nil {
-			return
-		}
 	default:
 		return n, fmt.Errorf("chuck has unsupported compression type: %#x", chunk.Type)
 	}
 
-	w.Flush()
-
-	return
+	return int(chunk.CompressedLength), nil
 }
 
 // Open opens the named file using os.Open and prepares it for use as a dmg.
@@ -567,8 +551,7 @@ func (d *DMG) GetBlock(name string) (*UDIFBlockData, error) {
 func (d *DMG) Load() error {
 
 	var out bytes.Buffer
-
-	w := bufio.NewWriter(&out)
+	dat := make([]byte, 0, types.BLOCK_SIZE)
 
 	block, err := d.GetBlock("Primary GPT Header")
 	if err != nil {
@@ -576,7 +559,7 @@ func (d *DMG) Load() error {
 	}
 
 	for i, chunk := range block.Chunks {
-		if _, err := chunk.DecompressChunk(d.sr, w); err != nil {
+		if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
 			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
 		}
 	}
@@ -595,8 +578,10 @@ func (d *DMG) Load() error {
 		return fmt.Errorf("failed to load and verify GPT: %w", err)
 	}
 
+	out.Reset()
+
 	for i, chunk := range block.Chunks {
-		if _, err := chunk.DecompressChunk(d.sr, w); err != nil {
+		if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
 			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
 		}
 	}
@@ -672,8 +657,7 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 	var chkbuf bytes.Buffer
 	ckw := bufio.NewWriter(&chkbuf)
 
-	dec := bytes.NewBuffer(make([]byte, 0, d.maxChunkSize))
-	dcw := bufio.NewWriter(dec)
+	dec := make([]byte, 0, d.maxChunkSize)
 
 	for length > 0 {
 
@@ -702,19 +686,18 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 			}
 		}
 
-		_, err := sect.DecompressChunk(d.sr, dcw)
+		_, err := sect.DecompressChunk(d.sr, dec, &chkbuf)
 		if err != nil {
 			return n, fmt.Errorf("failed to decompress chunk at index %d: %w", entryIdx, err)
 		}
 
 		// write decompressed chunk bytes to chunks buffer
-		ckw.Write(dec.Bytes())
+		ckw.Write(dec)
 
 		if !d.config.DisableCache {
 			// cache decompressed chunk data
-			d.cache.Add(entryIdx, dec.Bytes())
+			d.cache.Add(entryIdx, chkbuf.Bytes())
 			// reset decompressed data (for next chunk) // FIXME: do we need to do this?
-			dec.Reset()
 		}
 
 		length -= int64(rdSize)
@@ -730,4 +713,76 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 	}
 
 	return len(buf), nil
+}
+
+// ReadFile extracts a file from the DMG
+func (d *DMG) ReadFile(w *bufio.Writer, off, length int64) (err error) {
+
+	var (
+		rdOffs int64
+		rdSize int
+	)
+
+	off += int64(d.apfsPartitionOffset) // map offset from start of Apple_APFS partition
+
+	apfsChunks := d.Blocks[d.firstAPFSPartition].Chunks
+
+	entryIdx := len(apfsChunks)
+
+	beg := 0
+	mid := 0
+	end := entryIdx - 1
+
+	// binary search through chunks
+	for beg <= end {
+		mid = (beg + end) / 2
+		if off >= int64(apfsChunks[mid].DiskOffset) && off < int64(apfsChunks[mid].DiskOffset+apfsChunks[mid].DiskLength) {
+			entryIdx = mid
+			break
+		} else if off < int64(apfsChunks[mid].DiskOffset) {
+			end = mid - 1
+		} else {
+			beg = mid + 1
+		}
+	}
+
+	var out bytes.Buffer
+	dec := make([]byte, 0, d.maxChunkSize)
+
+	for length > 0 {
+		if int(entryIdx) >= len(apfsChunks)-1 {
+			return fmt.Errorf("entryIdx >= []apfsChunks")
+		}
+
+		sect := apfsChunks[entryIdx]
+
+		if off-int64(sect.DiskOffset) < 0 {
+			rdOffs = 0
+		} else {
+			rdOffs = off - int64(sect.DiskOffset)
+		}
+
+		if _, err = sect.DecompressChunk(d.sr, dec, &out); err != nil {
+			return fmt.Errorf("failed to decompressed chunk %d", entryIdx)
+		}
+
+		if length >= int64(out.Len()) {
+			if rdSize, err = w.Write(out.Bytes()[rdOffs:]); err != nil {
+				return fmt.Errorf("failed to write decompressed chunk to output buffer")
+			}
+		} else {
+			if rdSize, err = w.Write(out.Bytes()[rdOffs : rdOffs+length]); err != nil {
+				return fmt.Errorf("failed to write decompressed chunk to output buffer")
+			}
+		}
+
+		out.Reset()
+
+		length -= int64(rdSize)
+		entryIdx++
+	}
+
+	w.Flush()
+
+	return nil
 }
