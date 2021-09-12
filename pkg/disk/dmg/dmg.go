@@ -627,8 +627,12 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 
 	var (
 		rdOffs int64
-		rdSize int64
+		rdSize int
 	)
+
+	var bw bytes.Buffer
+
+	w := bufio.NewWriter(&bw)
 
 	off += int64(d.apfsPartitionOffset) // map offset from start of Apple_APFS partition
 	length := int64(len(buf))
@@ -654,63 +658,63 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 		}
 	}
 
-	var chkbuf bytes.Buffer
-	ckw := bufio.NewWriter(&chkbuf)
-
+	var out bytes.Buffer
 	dec := make([]byte, 0, d.maxChunkSize)
 
 	for length > 0 {
 
 		if int(entryIdx) >= len(apfsChunks)-1 {
-			return -1, fmt.Errorf("entryIdx >= []apfsChunks")
+			return n, fmt.Errorf("entryIdx >= []apfsChunks")
 		}
 
 		sect := apfsChunks[entryIdx]
 
-		rdOffs = off - int64(sect.DiskOffset)
-		rdSize = length
-
-		if rdOffs+rdSize > int64(sect.DiskLength) {
-			rdSize = int64(sect.DiskLength) - rdOffs
+		if off-int64(sect.DiskOffset) < 0 {
+			rdOffs = 0
+		} else {
+			rdOffs = off - int64(sect.DiskOffset)
 		}
 
 		if !d.config.DisableCache {
 			// check the cache
 			if val, found := d.cache.Get(entryIdx); found {
-				if _, err = ckw.Write(val.([]byte)); err != nil {
-					return -1, fmt.Errorf("failed to write cached chunk data to writer")
+				if _, err = out.Write(val.([]byte)); err != nil {
+					return n, fmt.Errorf("failed to write cached chunk data to writer")
 				}
-				length -= int64(rdSize)
-				entryIdx++
-				continue
+			} else {
+				if _, err = sect.DecompressChunk(d.sr, dec, &out); err != nil {
+					return n, fmt.Errorf("failed to decompressed chunk %d", entryIdx)
+				}
+			}
+		} else {
+			if _, err = sect.DecompressChunk(d.sr, dec, &out); err != nil {
+				return n, fmt.Errorf("failed to decompressed chunk %d", entryIdx)
+			}
+			if !d.config.DisableCache {
+				d.cache.Add(entryIdx, out.Bytes())
 			}
 		}
 
-		_, err := sect.DecompressChunk(d.sr, dec, &chkbuf)
-		if err != nil {
-			return n, fmt.Errorf("failed to decompress chunk at index %d: %w", entryIdx, err)
+		if length >= int64(out.Len())-rdOffs {
+			if rdSize, err = w.Write(out.Bytes()[rdOffs:]); err != nil {
+				return n, fmt.Errorf("failed to write decompressed chunk to output buffer")
+			}
+		} else {
+			if rdSize, err = w.Write(out.Bytes()[rdOffs : rdOffs+length]); err != nil {
+				return n, fmt.Errorf("failed to write decompressed chunk to output buffer")
+			}
 		}
 
-		// write decompressed chunk bytes to chunks buffer
-		ckw.Write(dec)
+		out.Reset()
 
-		if !d.config.DisableCache {
-			// cache decompressed chunk data
-			d.cache.Add(entryIdx, chkbuf.Bytes())
-			// reset decompressed data (for next chunk) // FIXME: do we need to do this?
-		}
-
+		n += rdSize
 		length -= int64(rdSize)
 		entryIdx++
 	}
 
-	r := bytes.NewReader(chkbuf.Bytes())
+	w.Flush()
 
-	r.Seek(off-int64(apfsChunks[mid].DiskOffset), io.SeekStart)
-
-	if err := binary.Read(r, binary.LittleEndian, &buf); err != nil {
-		return n, fmt.Errorf("failed to fill input buffer with processed chunk data: %w", err)
-	}
+	bw.Read(buf)
 
 	return len(buf), nil
 }
