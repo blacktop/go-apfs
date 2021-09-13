@@ -204,7 +204,9 @@ func (a *APFS) List(path string) error {
 		return err
 	}
 
-	parts := strings.Split(path, string(filepath.Separator))
+	parts := strings.FieldsFunc(path, func(c rune) bool {
+		return c == filepath.Separator
+	})
 
 	for idx, part := range parts {
 		if len(part) > 0 {
@@ -357,124 +359,114 @@ func (a *APFS) Tree(path string) error {
 }
 
 // Copy copies the contents of the src file to the dest file TODO: finish this
-func (a *APFS) Copy(src, dest string) error {
+func (a *APFS) Copy(src, dest string) (err error) {
 
 	var decmpfsHdr *types.DecmpfsDiskHeader
-
+	var fsRecords types.FSRecords
 	sr := io.NewSectionReader(a.r, 0, 1<<63-1)
 
-	rec, err := a.find(src)
+	files, err := a.find(src)
 	if err != nil {
 		return err
 	}
 
-	if rec.Hdr.GetType() == types.APFS_TYPE_INODE {
-		if rec.Val.(types.JInodeVal).Mode == types.DIR { // copying a directory
-			fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
-			if err != nil {
-				return err
-			}
-			for _, rec := range fsRecords {
-				if rec.Hdr.GetType() == types.APFS_TYPE_INODE {
-					if rec.Val.(types.JInodeVal).Mode == types.REG {
+	for _, rec := range files {
 
-					}
-				}
-			}
-		} else if rec.Val.(types.JInodeVal).Mode == types.REG { // copying a single file
-
-		} else if rec.Val.(types.JInodeVal).Mode == types.LNK {
-
-		}
-	}
-
-	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
-	if err != nil {
-		return err
-	}
-
-	var length uint64
-	var physBlockNum uint64
-	var uncompressedSize uint64
-	var totalBytesWritten uint64
-	var symlink string
-
-	compressed := false
-
-	for _, rec := range fsRecords {
-		switch rec.Hdr.GetType() {
-		case types.APFS_TYPE_INODE:
-			if rec.Val.(types.JInodeVal).InternalFlags&types.INODE_HAS_UNCOMPRESSED_SIZE != 0 {
-				compressed = true
-				uncompressedSize = rec.Val.(types.JInodeVal).UncompressedSize
-			}
-			for _, xf := range rec.Val.(types.JInodeVal).Xfields {
-				switch xf.XType {
-				case types.INO_EXT_TYPE_NAME:
-				case types.INO_EXT_TYPE_DSTREAM:
-					totalBytesWritten = xf.Field.(types.JDstreamT).TotalBytesWritten
-				}
-			}
-		case types.APFS_TYPE_FILE_EXTENT:
-			length = rec.Val.(types.JFileExtentValT).Length()
-			physBlockNum = rec.Val.(types.JFileExtentValT).PhysBlockNum
-		case types.APFS_TYPE_XATTR:
-			switch rec.Key.(types.JXattrKeyT).Name {
-			case types.XATTR_RESOURCEFORK_EA_NAME:
-				fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), types.XidT(^uint64(0)))
-				if err != nil {
-					return err
-				}
-				for _, rec := range fsRecords {
-					switch rec.Hdr.GetType() {
-					case types.APFS_TYPE_FILE_EXTENT:
-						length = rec.Val.(types.JFileExtentValT).Length()
-						physBlockNum = rec.Val.(types.JFileExtentValT).PhysBlockNum
-					}
-				}
-			case types.XATTR_DECMPFS_EA_NAME:
-				decmpfsHdr, err = types.GetDecmpfsHeader(rec)
-				if err != nil {
-					return err
-				}
-			case types.XATTR_SYMLINK_EA_NAME:
-				symlink = string(rec.Val.(types.JXattrValT).Data.([]byte)[:])
-				fmt.Println(symlink)
-			}
-		}
-	}
-
-	fo, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer fo.Close()
-
-	if compressed {
-		w := bufio.NewWriter(fo)
-		if err := decmpfsHdr.DecompressFile(a.r, w, physBlockNum, length); err != nil {
+		fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
+		if err != nil {
 			return err
 		}
-		if info, err := fo.Stat(); err == nil {
-			if info.Size() != int64(uncompressedSize) {
-				log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), uncompressedSize)
+
+		var length uint64
+		var physBlockNum uint64
+		var uncompressedSize uint64
+		var totalBytesWritten uint64
+		var fileName string
+		var symlink string
+
+		compressed := false
+
+		for _, rec := range fsRecords {
+			switch rec.Hdr.GetType() {
+			case types.APFS_TYPE_INODE:
+				if rec.Val.(types.JInodeVal).InternalFlags&types.INODE_HAS_UNCOMPRESSED_SIZE != 0 {
+					compressed = true
+					uncompressedSize = rec.Val.(types.JInodeVal).UncompressedSize
+				}
+				for _, xf := range rec.Val.(types.JInodeVal).Xfields {
+					switch xf.XType {
+					case types.INO_EXT_TYPE_NAME:
+						fileName = xf.Field.(string)
+					case types.INO_EXT_TYPE_DSTREAM:
+						totalBytesWritten = xf.Field.(types.JDstreamT).TotalBytesWritten
+					}
+				}
+			case types.APFS_TYPE_FILE_EXTENT:
+				length = rec.Val.(types.JFileExtentValT).Length()
+				physBlockNum = rec.Val.(types.JFileExtentValT).PhysBlockNum
+			case types.APFS_TYPE_XATTR:
+				switch rec.Key.(types.JXattrKeyT).Name {
+				case types.XATTR_RESOURCEFORK_EA_NAME:
+					fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), types.XidT(^uint64(0)))
+					if err != nil {
+						return err
+					}
+					for _, rec := range fsRecords {
+						switch rec.Hdr.GetType() {
+						case types.APFS_TYPE_FILE_EXTENT:
+							length = rec.Val.(types.JFileExtentValT).Length()
+							physBlockNum = rec.Val.(types.JFileExtentValT).PhysBlockNum
+						}
+					}
+				case types.XATTR_DECMPFS_EA_NAME:
+					decmpfsHdr, err = types.GetDecmpfsHeader(rec)
+					if err != nil {
+						return err
+					}
+				case types.XATTR_SYMLINK_EA_NAME:
+					symlink = string(rec.Val.(types.JXattrValT).Data.([]byte)[:])
+					fmt.Println(symlink)
+				}
 			}
 		}
-	} else {
-		if err := a.dev.ReadFile(bufio.NewWriter(fo), int64(physBlockNum*types.BLOCK_SIZE), int64(totalBytesWritten)); err != nil {
-			return fmt.Errorf("failed to write file data from device: %v", err)
+
+		fo, err := os.Create(filepath.Join(dest, fileName))
+		if err != nil {
+			return err
 		}
-		if info, err := fo.Stat(); err == nil {
-			if info.Size() != int64(totalBytesWritten) {
-				log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), totalBytesWritten)
+		defer fo.Close()
+
+		if compressed {
+			w := bufio.NewWriter(fo)
+			if err := decmpfsHdr.DecompressFile(a.r, w, physBlockNum, length); err != nil {
+				return err
 			}
+			if info, err := fo.Stat(); err == nil {
+				if info.Size() != int64(uncompressedSize) {
+					log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), uncompressedSize)
+				}
+			}
+			log.Infof("Created %s", filepath.Join(dest, fileName))
+		} else {
+			if err := a.dev.ReadFile(bufio.NewWriter(fo), int64(physBlockNum*types.BLOCK_SIZE), int64(totalBytesWritten)); err != nil {
+				return fmt.Errorf("failed to write file data from device: %v", err)
+			}
+			if info, err := fo.Stat(); err == nil {
+				if info.Size() != int64(totalBytesWritten) {
+					log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), totalBytesWritten)
+				}
+			}
+			log.Infof("Created %s", filepath.Join(dest, fileName))
 		}
 	}
 
 	return nil
 }
 
-func (a *APFS) find(path string) (*types.NodeEntry, error) {
+func (a *APFS) find(path string) ([]types.NodeEntry, error) {
+
+	var files []types.NodeEntry
+
 	sr := io.NewSectionReader(a.r, 0, 1<<63-1)
 
 	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(types.FSROOT_OID), types.XidT(^uint64(0)))
@@ -482,7 +474,10 @@ func (a *APFS) find(path string) (*types.NodeEntry, error) {
 		return nil, err
 	}
 
-	parts := strings.Split(path, string(filepath.Separator))
+	parts := strings.FieldsFunc(path, func(c rune) bool {
+		return c == filepath.Separator
+	})
+
 	for idx, part := range parts {
 		if len(part) > 0 {
 			for _, rec := range fsRecords {
@@ -494,13 +489,35 @@ func (a *APFS) find(path string) (*types.NodeEntry, error) {
 							return nil, err
 						}
 						if idx == len(parts)-1 { // last part
-							if rec.Val.(types.JDrecVal).Flags == types.DT_REG {
+							switch rec.Val.(types.JDrecVal).Flags {
+							case types.DT_REG:
 								for _, regRec := range fsRecords {
 									switch regRec.Hdr.GetType() {
 									case types.APFS_TYPE_INODE:
-										return &rec, nil
+										return append(files, rec), nil
 									}
 								}
+							case types.DT_DIR:
+								fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
+								if err != nil {
+									return nil, err
+								}
+								for _, dirRec := range fsRecords {
+									switch dirRec.Hdr.GetType() {
+									case types.APFS_TYPE_DIR_REC:
+										fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(dirRec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
+										if err != nil {
+											return nil, err
+										}
+										for _, rec := range fsRecords {
+											switch rec.Hdr.GetType() {
+											case types.APFS_TYPE_INODE:
+												files = append(files, dirRec)
+											}
+										}
+									}
+								}
+								return files, nil
 							}
 						}
 					}

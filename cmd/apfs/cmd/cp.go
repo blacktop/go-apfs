@@ -64,7 +64,7 @@ var cpCmd = &cobra.Command{
 			if err != nil {
 				log.Fatal(err.Error())
 			}
-			if err := a.Copy(args[1], filepath.Join(cwd, filepath.Base(args[1]))); err != nil {
+			if err := a.Copy(args[1], cwd); err != nil {
 				log.Fatal(err.Error())
 			}
 		}

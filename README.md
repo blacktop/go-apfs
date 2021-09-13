@@ -22,7 +22,7 @@ Install
 go install github.com/blacktop/go-apfs/cmd/apfs
 ```
 
-> OR download from [Releases](https://github.com/blacktop/go-apfs/releases/latest)
+> OR download from [Releases](https://github.com/blacktop/go-apfs/releases/latest) *(coming soon)*
 
 Build
 
@@ -49,22 +49,22 @@ List the `/` directory
 ```bash
 ❯ apfs ls APFS.dmg
 
-DT_DIR - Fri Jun  4 02:54:21 MDT 2021 - .ba
-DT_DIR - Fri Jun  4 02:54:22 MDT 2021 - .mb
-DT_DIR - Fri Jun  4 02:54:22 MDT 2021 - Applications
-DT_DIR - Fri Jun  4 02:54:54 MDT 2021 - Developer
-DT_DIR - Fri Jun  4 02:54:54 MDT 2021 - Library
-DT_DIR - Fri Jun  4 02:55:03 MDT 2021 - System
-DT_DIR - Fri Jun  4 03:01:39 MDT 2021 - bin
-DT_DIR - Fri Jun  4 03:01:39 MDT 2021 - cores
-DT_DIR - Fri Jun  4 03:01:39 MDT 2021 - dev
-DT_DIR - Fri Jun  4 03:01:39 MDT 2021 - private
-DT_DIR - Fri Jun  4 03:01:39 MDT 2021 - sbin
-DT_DIR - Fri Jun  4 03:01:39 MDT 2021 - usr
-DT_LNK - Fri Jun  4 03:01:39 MDT 2021 - etc
-DT_LNK - Fri Jun  4 03:01:39 MDT 2021 - tmp
-DT_LNK - Fri Jun  4 03:01:53 MDT 2021 - var
-DT_REG - Fri Jun  4 02:54:21 MDT 2021 - .file
+DT_DIR - 06Jun21 02:54:21 - .ba
+DT_DIR - 06Jun21 02:54:22 - .mb
+DT_DIR - 06Jun21 02:54:22 - Applications
+DT_DIR - 06Jun21 02:54:54 - Developer
+DT_DIR - 06Jun21 02:54:54 - Library
+DT_DIR - 06Jun21 02:55:03 - System
+DT_DIR - 06Jun21 03:01:39 - bin
+DT_DIR - 06Jun21 03:01:39 - cores
+DT_DIR - 06Jun21 03:01:39 - dev
+DT_DIR - 06Jun21 03:01:39 - private
+DT_DIR - 06Jun21 03:01:39 - sbin
+DT_DIR - 06Jun21 03:01:39 - usr
+DT_LNK - 06Jun21 03:01:39 - etc
+DT_LNK - 06Jun21 03:01:39 - tmp
+DT_LNK - 06Jun21 03:01:53 - var
+DT_REG - 06Jun21 02:54:21 - .file
 ```
 
 #### Copy files
