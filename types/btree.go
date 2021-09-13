@@ -912,7 +912,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 		for idx, entry := range node.Entries {
 
 			tocEntry = entry.(NodeEntry)
-			log.Debugf("  %d) %s", idx, tocEntry)
+			log.Debugf("%2d) %s", idx, tocEntry)
 
 			if node.IsLeaf() {
 				if tocEntry.Hdr.GetID() == uint64(oid) {
@@ -1054,7 +1054,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 				for idx := descPath[i]; idx < node.Nkeys; idx++ {
 
 					tocEntry = node.Entries[idx].(NodeEntry)
-					log.Debugf("  %d) %s", idx, tocEntry)
+					log.Debugf("%2d) %s", idx, tocEntry)
 
 					if tocEntry.Hdr.GetID() != uint64(oid) {
 						// This record doesn't have the right OID, so we must have

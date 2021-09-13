@@ -30,7 +30,7 @@ const (
 
 // NxReaperPhysT is a nx_reaper_phys_t struct
 type NxReaperPhysT struct {
-	O               ObjPhysT
+	Obj             ObjPhysT
 	NextReapID      uint64
 	CompletedID     uint64
 	Head            OidT
@@ -55,7 +55,7 @@ type ReaperPhys struct {
 
 // NxReapListPhysT is a nx_reap_list_phys_t struct
 type NxReapListPhysT struct {
-	O     ObjPhysT
+	Obj   ObjPhysT
 	Next  OidT
 	Flags uint32
 	Max   uint32

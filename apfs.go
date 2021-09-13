@@ -185,7 +185,7 @@ func (a *APFS) getValidCSB() error {
 		a.Valid = &nxsb
 	}
 
-	if a.Valid.XpDescIndex+a.Valid.XpDescLen <= xpDescBlocks {
+	if a.Valid.XpDescIndex+a.Valid.XpDescLen <= xpDescBlocks { // TODO: remove this
 		log.Debug("contiguous")
 	} else {
 		log.Warn("shizzzz")
@@ -203,7 +203,9 @@ func (a *APFS) List(path string) error {
 	if err != nil {
 		return err
 	}
+
 	parts := strings.Split(path, string(filepath.Separator))
+
 	for idx, part := range parts {
 		if len(part) > 0 {
 			for _, rec := range fsRecords {
@@ -215,7 +217,8 @@ func (a *APFS) List(path string) error {
 							return err
 						}
 						if idx == len(parts)-1 { // last part
-							if rec.Val.(types.JDrecVal).Flags == types.DT_REG {
+							switch rec.Val.(types.JDrecVal).Flags {
+							case types.DT_REG:
 								var rFile types.RegFile
 								for _, regRec := range fsRecords {
 									switch regRec.Hdr.GetType() {
@@ -239,9 +242,42 @@ func (a *APFS) List(path string) error {
 										}
 									}
 								}
-
 								fmt.Println(rFile)
 								return nil
+							case types.DT_LNK:
+								var rFile types.RegFile
+								for _, lnkRec := range fsRecords {
+									switch lnkRec.Hdr.GetType() {
+									case types.APFS_TYPE_INODE:
+										for _, regRec := range fsRecords {
+											switch regRec.Hdr.GetType() {
+											case types.APFS_TYPE_INODE:
+												rFile.Owner = regRec.Val.(types.JInodeVal).Owner
+												rFile.Group = regRec.Val.(types.JInodeVal).Group
+												rFile.Mode = regRec.Val.(types.JInodeVal).Mode
+												rFile.CreateTime = regRec.Val.(types.JInodeVal).CreateTime
+
+												for _, xf := range regRec.Val.(types.JInodeVal).Xfields {
+													switch xf.XType {
+													case types.INO_EXT_TYPE_NAME:
+														rFile.Name = types.DirColor(xf.Field.(string)) // TODO: should this always be dir colored?
+													case types.INO_EXT_TYPE_DSTREAM:
+														rFile.Size = xf.Field.(types.JDstreamT).Size
+													}
+												}
+
+												if regRec.Val.(types.JInodeVal).InternalFlags&types.INODE_HAS_UNCOMPRESSED_SIZE != 0 {
+													rFile.Size = regRec.Val.(types.JInodeVal).UncompressedSize
+												}
+											}
+										}
+									case types.APFS_TYPE_XATTR:
+										switch lnkRec.Key.(types.JXattrKeyT).Name {
+										case types.XATTR_SYMLINK_EA_NAME:
+											fmt.Printf("%s -> %s", rFile, string(lnkRec.Val.(types.JXattrValT).Data.([]byte)[:]))
+										}
+									}
+								}
 							}
 						}
 					}
@@ -332,6 +368,26 @@ func (a *APFS) Copy(src, dest string) error {
 		return err
 	}
 
+	if rec.Hdr.GetType() == types.APFS_TYPE_INODE {
+		if rec.Val.(types.JInodeVal).Mode == types.DIR { // copying a directory
+			fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
+			if err != nil {
+				return err
+			}
+			for _, rec := range fsRecords {
+				if rec.Hdr.GetType() == types.APFS_TYPE_INODE {
+					if rec.Val.(types.JInodeVal).Mode == types.REG {
+
+					}
+				}
+			}
+		} else if rec.Val.(types.JInodeVal).Mode == types.REG { // copying a single file
+
+		} else if rec.Val.(types.JInodeVal).Mode == types.LNK {
+
+		}
+	}
+
 	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 	if err != nil {
 		return err
@@ -341,11 +397,11 @@ func (a *APFS) Copy(src, dest string) error {
 	var physBlockNum uint64
 	var uncompressedSize uint64
 	var totalBytesWritten uint64
+	var symlink string
 
 	compressed := false
 
 	for _, rec := range fsRecords {
-		fmt.Println(rec)
 		switch rec.Hdr.GetType() {
 		case types.APFS_TYPE_INODE:
 			if rec.Val.(types.JInodeVal).InternalFlags&types.INODE_HAS_UNCOMPRESSED_SIZE != 0 {
@@ -364,24 +420,26 @@ func (a *APFS) Copy(src, dest string) error {
 			physBlockNum = rec.Val.(types.JFileExtentValT).PhysBlockNum
 		case types.APFS_TYPE_XATTR:
 			switch rec.Key.(types.JXattrKeyT).Name {
-			case "com.apple.ResourceFork":
+			case types.XATTR_RESOURCEFORK_EA_NAME:
 				fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), types.XidT(^uint64(0)))
 				if err != nil {
 					return err
 				}
 				for _, rec := range fsRecords {
-					fmt.Println(rec)
 					switch rec.Hdr.GetType() {
 					case types.APFS_TYPE_FILE_EXTENT:
 						length = rec.Val.(types.JFileExtentValT).Length()
 						physBlockNum = rec.Val.(types.JFileExtentValT).PhysBlockNum
 					}
 				}
-			case "com.apple.decmpfs":
+			case types.XATTR_DECMPFS_EA_NAME:
 				decmpfsHdr, err = types.GetDecmpfsHeader(rec)
 				if err != nil {
 					return err
 				}
+			case types.XATTR_SYMLINK_EA_NAME:
+				symlink = string(rec.Val.(types.JXattrValT).Data.([]byte)[:])
+				fmt.Println(symlink)
 			}
 		}
 	}

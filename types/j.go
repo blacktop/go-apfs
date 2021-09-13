@@ -262,7 +262,7 @@ type mode_t uint16
 type dir_ent_file_type uint16
 
 const (
-	S_IFMT = 0170000 // The bit mask used to access the file type.
+	S_IFMT mode_t = 0170000 // The bit mask used to access the file type.
 
 	FIFO mode_t = 0010000 // A named pipe.
 	CHR  mode_t = 0020000 // A character-special file.
@@ -478,10 +478,10 @@ type JDrecVal struct {
 }
 
 func (v JDrecVal) String() string {
-	vout := fmt.Sprintf("file_id=%#x, date_added=%s, flags=%s",
+	vout := fmt.Sprintf("file_id=%#x flags=%s, date_added=%s,",
 		v.FileID,
-		v.DateAdded,
 		v.Flags.String(),
+		v.DateAdded,
 	)
 	if len(v.Xfields) > 0 {
 		var xfout []string

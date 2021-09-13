@@ -357,18 +357,18 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if n, err = out.Write(make([]byte, chunk.CompressedLength)); err != nil {
 			return -1, fmt.Errorf("failed to write ZERO_FILL data")
 		}
-		log.Debugf("Wrote %#x bytes of ZERO_FILL out", n)
+		log.Debugf("Read %#x bytes of ZERO_FILL out", n)
 	case UNCOMPRESSED:
 		if nn, err = out.ReadFrom(io.NewSectionReader(r, int64(chunk.CompressedOffset), int64(chunk.CompressedLength))); err != nil {
 			return -1, fmt.Errorf("failed to write UNCOMPRESSED data")
 		}
 		n = int(nn)
-		log.Debugf("Wrote %#x bytes of UNCOMPRESSED data", n)
+		log.Debugf("Read %#x bytes of UNCOMPRESSED data", n)
 	case IGNORED:
 		if n, err = out.Write(make([]byte, chunk.DiskLength*udifSectorSize)); err != nil {
 			return -1, fmt.Errorf("failed to write IGNORED data")
 		}
-		log.Debugf("Wrote %#x bytes of IGNORED outa", n)
+		log.Debugf("Read %#x bytes of IGNORED outa", n)
 	case COMPRESS_ADC:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -377,7 +377,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if n, err = out.Write(adc.DecompressADC(in)); err != nil {
 			return -1, fmt.Errorf("failed to write COMPRESS_ADC data")
 		}
-		log.Debugf("Wrote %#x bytes of COMPRESS_ADC data", n)
+		log.Debugf("Read %#x bytes of COMPRESS_ADC data", n)
 	case COMPRESS_ZLIB:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.DiskOffset)); err != nil {
@@ -392,7 +392,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 			return -1, fmt.Errorf("failed to write COMPRESS_ZLIB data")
 		}
 		n = int(nn)
-		log.Debugf("Wrote %#x bytes of COMPRESS_ZLIB data", n)
+		log.Debugf("Read %#x bytes of COMPRESS_ZLIB data", n)
 	case COMPRESSS_BZ2:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -402,7 +402,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 			return -1, fmt.Errorf("failed to write COMPRESSS_BZ2 data")
 		}
 		n = int(nn)
-		log.Debugf("Wrote %#x bytes of COMPRESSS_BZ2 data", n)
+		log.Debugf("Read %#x bytes of COMPRESSS_BZ2 data", n)
 	case COMPRESSS_LZFSE:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -411,7 +411,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if n, err = out.Write(lzfse.DecodeBuffer(in)); err != nil {
 			return -1, fmt.Errorf("failed to write COMPRESSS_LZFSE data")
 		}
-		log.Debugf("Wrote %#x bytes of COMPRESSS_LZFSE data", n)
+		log.Debugf("Read %#x bytes of COMPRESSS_LZFSE data", n)
 	case COMPRESSS_LZMA:
 		return n, fmt.Errorf("COMPRESSS_LZMA is currently unsupported")
 	case COMMENT: // TODO: how to parse comments?

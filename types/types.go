@@ -146,6 +146,7 @@ func VerifyChecksum(data []byte) bool {
 }
 
 var nameColor = color.New(color.Bold, color.FgHiBlue).SprintFunc()
-var dirColor = color.New(color.Bold, color.FgHiBlue).SprintFunc()
+var DirColor = color.New(color.Bold, color.FgHiBlue).SprintFunc()
 var typeColor = color.New(color.Bold, color.FgHiYellow).SprintFunc()
+var timeColor = color.New(color.FgCyan).SprintFunc()
 var hexdumpColor = color.New(color.Faint, color.FgHiWhite).SprintFunc()

@@ -166,7 +166,7 @@ func (recs FSRecords) String() string {
 		case APFS_TYPE_DIR_REC:
 			name := rec.Key.(JDrecHashedKeyT).Name
 			if rec.Val.(JDrecVal).Flags == DT_DIR {
-				name = dirColor(name)
+				name = DirColor(name)
 			}
 			fs = append(fs, fmt.Sprintf("%s - %s - %s\n",
 				rec.Val.(JDrecVal).Flags.String(),

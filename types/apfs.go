@@ -81,7 +81,8 @@ type EpochTime uint64
 
 func (e EpochTime) String() string {
 	t := time.Unix(0, int64(e))
-	return t.Format(time.UnixDate)
+	// return t.Format(time.UnixDate)
+	return timeColor(t.Format("01Jan06 15:04:05"))
 }
 
 type apfs_modified_by_t struct {

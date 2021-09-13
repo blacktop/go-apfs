@@ -38,7 +38,7 @@ const (
 
 // ErStatePhysHeader is a er_state_phys_header_t struct
 type ErStatePhysHeader struct {
-	O       ObjPhysT
+	Obj     ObjPhysT
 	Magic   magic
 	Version uint32
 }
@@ -48,12 +48,12 @@ type ErStatePhys struct {
 	Header               ErStatePhysHeader
 	Flags                uint64
 	SnapXid              uint64
-	CurrentFextObjId     uint64
+	CurrentFextObjID     uint64
 	FileOffset           uint64
 	Progress             uint64
 	TotalBlkToEncrypt    uint64
 	BlockmapOid          OidT
-	TidemarkObjId        uint64
+	TidemarkObjID        uint64
 	RecoveryExtentsCount uint64
 	RecoveryListOid      OidT
 	RecoveryLength       uint64
@@ -64,7 +64,7 @@ type ErStatePhysV1T struct {
 	Header            ErStatePhysHeader
 	Flags             uint64
 	SnapXid           uint64
-	CurrentFextObjId  uint64
+	CurrentFextObjID  uint64
 	FileOffset        uint64
 	FextPbn           uint64
 	Paddr             uint64
@@ -93,7 +93,7 @@ const (
 
 // ErRecoveryBlockPhysT is a er_recovery_block_phys_t struct
 type ErRecoveryBlockPhysT struct {
-	O       ObjPhysT
+	Obj     ObjPhysT
 	Offset  uint64
 	NextOid OidT
 	// Data []byte
@@ -107,7 +107,7 @@ type ErRecoveryBlockPhys struct {
 
 // GbitmapBlockPhysT is a gbitmap_block_phys_t struct
 type GbitmapBlockPhysT struct {
-	O ObjPhysT
+	Obj ObjPhysT
 	// Field []uint64
 }
 
@@ -119,7 +119,7 @@ type GbitmapBlockPhys struct {
 
 // GbitmapPhys is a gbitmap_phys struct
 type GbitmapPhys struct {
-	O        ObjPhysT
+	Obj      ObjPhysT
 	TreeOid  OidT
 	BitCount uint64
 	Flags    uint64
