@@ -6,11 +6,12 @@ import (
 	"strings"
 )
 
-//go:generate stringer -type=omapValFlag,omapSnapshotFlag,omapFlag -output omap_string.go
+//go:generate stringer -type=omapValFlag,omapSnapshotFlag,omapFlag,omapReapPhase -output omap_string.go
 
 type omapValFlag uint32
 type omapSnapshotFlag uint32
 type omapFlag uint32
+type omapReapPhase uint32
 
 const (
 	/** Object Map Value Flags **/
@@ -37,8 +38,8 @@ const (
 	OMAP_MAX_SNAP_COUNT = math.MaxUint32
 
 	/** Object Map Reaper Phases **/
-	OMAP_REAP_PHASE_MAP_TREE      = 1
-	OMAP_REAP_PHASE_SNAPSHOT_TREE = 2
+	OMAP_REAP_PHASE_MAP_TREE      omapReapPhase = 1
+	OMAP_REAP_PHASE_SNAPSHOT_TREE omapReapPhase = 2
 )
 
 // OMapPhysT is a omap_phys_t struct

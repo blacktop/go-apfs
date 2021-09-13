@@ -1,72 +1,75 @@
 package types
 
-// NOTE: The APFS spec uses camel case for variable names, but in order to
-// maintain consistency with the rest of the APFS structures defined in this
-// repo, as well as abiding by de facto C conventions, we opt to continue using
-// snake case (underscores separating words).
+const (
+	/** Address Markers **/
+	FUSION_TIER2_DEVICE_BYTE_ADDR = 0x4000000000000000
 
-/** `fusion_wbc_phys_t` **/
+	/** Fusion Middle-Tree Flags **/
+	FUSION_MT_DIRTY    = (1 << 0)
+	FUSION_MT_TENANT   = (1 << 1)
+	FUSION_MT_ALLFLAGS = (FUSION_MT_DIRTY | FUSION_MT_TENANT)
+)
 
-// typedef struct {
-//     ObjPhysT  fwp_obj_hdr;
-//     uint64_t    fwp_version;
-//     OidT       fwp_list_head_oid;
-//     OidT       fwp_list_tail_oid;
-//     uint64_t    fwp_stable_head_offset;
-//     uint64_t    fwp_stable_tail_offset;
-//     uint32_t    fwp_list_blocks_count;
-//     uint32_t    fwp_reserved;
-//     uint64_t    fwp_used_by_rc;
-//     prange_t    fwp_rc_stash;
-// } fusion_wbc_phys_t;
+// FUSION_TIER2_DEVICE_BLOCK_ADDR(_blksize) \
+// 	(FUSION_TIER2_DEVICE_BYTE_ADDR >> __builtin_ctzl(_blksize))
 
-// /** `fusion_wbc_list_entry_t` **/
-
-// typedef struct {
-//     paddr_t     fwle_wbc_lba;
-//     paddr_t     fwle_target_lba;
-//     uint64_t    fwle_length;
-// } fusion_wbc_list_entry_t;
-
-// /** `fusion_wbc_list_phys_t` **/
-
-// typedef struct {
-//     ObjPhysT  fwlp_obj_hdr;
-//     uint64_t    fwlp_version;
-//     uint64_t    fwlp_tail_offset;
-//     uint32_t    fwlp_index_begin;
-//     uint32_t    fwlp_index_end;
-//     uint32_t    fwlp_index_max;
-//     uint32_t    fwlp_reserved;
-//     fusion_wbc_list_entry_t     fwlp_list_entries[];
-// } fusion_wbc_list_phys_t;
-
-// /** Address Markers **/
-
-// #define FUSION_TIER2_DEVICE_BYTE_ADDR   0x4000000000000000ULL
-
-// #define FUSION_TIER2_DEVICE_BLOCK_ADDR(_blksize) \
-//     (FUSION_TIER2_DEVICE_BYTE_ADDR >> __builtin_ctzl(_blksize))
-
-// #define FUSION_BLKNO(_fusion_tier2, _blkno, _blksize)   ( \
-//     (_fusion_tier2) \
-//     ? ( FUSION_TIER2_DEVICE_BLOCK_ADDR(_blksize) | (_blkno) ) \
-//     : (_blkno) \
+// FUSION_BLKNO(_fusion_tier2, _blkno, _blksize)   ( \
+// 	(_fusion_tier2) \
+// 	? ( FUSION_TIER2_DEVICE_BLOCK_ADDR(_blksize) | (_blkno) ) \
+// 	: (_blkno) \
 // )
 
-// /** `fusion_mt_key_t` **/
+type FusionMtKey paddr_t
 
-// typedef paddr_t     fusion_mt_key_t;
+// FusionWbcPhys is a fusion_wbc_phys_t struct
+type FusionWbcPhys struct {
+	ObjHdr           ObjPhysT
+	Version          uint64
+	ListHeadOid      OidT
+	ListTailOid      OidT
+	StableHeadOffset uint64
+	StableTailOffset uint64
+	ListBlocksCount  uint32
+	Reserved         uint32
+	UsedByRc         uint64
+	RcStash          prange
+}
 
-// /** `fusion_mt_val_t` **/
+// FusionWbcListEntry is a fusion_wbc_list_entry_t struct
+type FusionWbcListEntry struct {
+	WbcLba    paddr_t
+	TargetLba paddr_t
+	Length    uint64
+}
 
-// typedef struct {
-//     paddr_t     fmv_lba;
-//     uint32_t    fmv_length;
-//     uint32_t    fmv_flags;
-// } fusion_mt_val_t;
+// FusionWbcListPhysT is a fusion_wbc_list_phys_t struct
+type FusionWbcListPhysT struct {
+	ObjHdr     ObjPhysT
+	Version    uint64
+	TailOffset uint64
+	IndexBegin uint32
+	IndexEnd   uint32
+	IndexMax   uint32
+	Reserved   uint32
+	// ListEntries []FusionWbcListEntry
+}
 
-// /** Fusion Middle-Tree Flags **/
+/*
+	This mapping keeps track of data from the hard drive thatʼs cached on the solid-state drive. For read caching,
+	the same data is stored on both the hard drive and the solid-state drive. For write caching, the data is stored
+	on the solid-state drive, but space for the data has been allocated on the hard drive, and the data will eventually
+	be copied to that space
+*/
 
-// #define FUSION_MT_DIRTY     (1 << 0)
-// #define FUSION_MT_TENANT    (1 << 1)
+// FusionWbcListPhys is a fusion_wbc_list_phys struct
+type FusionWbcListPhys struct {
+	FusionWbcListPhysT
+	ListEntries []FusionWbcListEntry
+}
+
+// FusionMtVal is a fusion_mt_val_t struct
+type FusionMtVal struct {
+	Lba    paddr_t
+	Length uint32
+	Flags  uint32
+}
