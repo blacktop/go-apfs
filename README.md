@@ -79,7 +79,7 @@ DT_REG - 06Jun21 02:54:21 - .file
 
 ## Spec
 
-Supports up to version **2020-06-22** of the [specification](https://developer.apple.com/support/downloads/Apple-File-System-Reference.pdf)
+Supports up to version **2020-06-22** of the *APFS** [specification](https://developer.apple.com/support/downloads/Apple-File-System-Reference.pdf)
 
 ## License
 
