@@ -34,20 +34,18 @@ make build
 
 #### List files
 
-Extract filesystem DMG from IPSW
+Extract filesystem DMG from IPSW using [ipsw](https://github.com/blacktop/ipsw)
 
 ```bash
-❯ unzip -l IPSW | grep dmg
-```
-
-```bash
-❯ unzip -p IPSW APFS.dmg > APFS.dmg
+❯ ipsw extract --dmg IPSW
+   • Extracting File System DMG
+   • Created 018-62379-017.dmg
 ```
 
 List the `/` directory
 
 ```bash
-❯ apfs ls APFS.dmg
+❯ apfs ls 018-62379-017.dmg
 
 DT_DIR - 06Jun21 02:54:21 - .ba
 DT_DIR - 06Jun21 02:54:22 - .mb
