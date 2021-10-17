@@ -6,7 +6,8 @@ before:
     - go generate ./...
     - ./.hack/make/completions
 builds:
-  - main: ./cmd/apfs
+  - id: darwin
+    main: ./cmd/apfs
     binary: apfs
     env:
       - CGO_ENABLED=1
