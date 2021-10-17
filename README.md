@@ -22,7 +22,13 @@ Install
 go install github.com/blacktop/go-apfs/cmd/apfs
 ```
 
-> OR download from [Releases](https://github.com/blacktop/go-apfs/releases/latest) *(coming soon)*
+With [Homebrew](https://brew.sh)
+
+```bash
+brew install blacktop/tap/apfs
+```
+
+> OR download from [Releases](https://github.com/blacktop/go-apfs/releases/latest)
 
 Build
 

@@ -100,6 +100,7 @@ func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
+	_ = x[S_IFMT-61440]
 	_ = x[FIFO-4096]
 	_ = x[CHR-8192]
 	_ = x[DIR-16384]
@@ -119,6 +120,7 @@ const (
 	_mode_t_name_5 = "LNK"
 	_mode_t_name_6 = "SOCK"
 	_mode_t_name_7 = "WHT"
+	_mode_t_name_8 = "S_IFMT"
 )
 
 func (i mode_t) String() string {
@@ -139,6 +141,8 @@ func (i mode_t) String() string {
 		return _mode_t_name_6
 	case i == 57344:
 		return _mode_t_name_7
+	case i == 61440:
+		return _mode_t_name_8
 	default:
 		return "mode_t(" + strconv.FormatInt(int64(i), 10) + ")"
 	}

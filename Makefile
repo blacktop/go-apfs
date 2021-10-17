@@ -29,12 +29,18 @@ test: build ## Test apfs (list root dir on APFS_DMG)
 .PHONY: dry_release
 dry_release: ## Run goreleaser without releasing/pushing artifacts to github
 	@echo " > Creating Pre-release Build ${NEXT_VERSION}"
-	@goreleaser build --rm-dist --skip-validate --single-target
+	@goreleaser build --rm-dist --skip-validate --id darwin
+
+.PHONY: snapshot
+snapshot: ## Run goreleaser snapshot
+	@echo " > Creating Snapshot ${NEXT_VERSION}"
+	@goreleaser --rm-dist --snapshot
 
 .PHONY: release
 release: ## Create a new release from the NEXT_VERSION
 	@echo " > Creating Release ${NEXT_VERSION}"
-	@.hack/make/release ${NEXT_VERSION}
+	@hack/make/release ${NEXT_VERSION}
+	@goreleaser --rm-dist
 
 .PHONY: destroy
 destroy: ## Remove release for the CUR_VERSION

@@ -2,32 +2,70 @@
 # Make sure to check the documentation at https://goreleaser.com
 before:
   hooks:
-    # You may remove this if you don't use go modules.
     - go mod tidy
-    # you may remove this if you don't need go generate
-    # - go generate ./...
+    - go generate ./...
+    - ./.hack/make/completions
 builds:
   - main: ./cmd/apfs
     binary: apfs
     env:
       - CGO_ENABLED=1
     goos:
-      - linux
-      - windows
       - darwin
+    goarch:
+      - amd64
+      - arm64
+universal_binaries:
+  - id: darwin
+    replace: true
+    name_template: "apfs"
 archives:
   - replacements:
-      darwin: Darwin
-      linux: Linux
-      windows: Windows
-      386: i386
+      darwin: macOS
       amd64: x86_64
+      all: universal
+    name_template: "apfs_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - completions/*
 checksum:
-  name_template: 'checksums.txt'
+  name_template: "checksums.darwin.txt"
+  disable: false
+signs:
+  - artifacts: checksum
 snapshot:
   name_template: "{{ incpatch .Version }}-next"
+brews:
+  - name: apfs
+    tap:
+      owner: blacktop
+      name: homebrew-tap
+    folder: Formula
+    homepage: "https://github.com/blacktop/go-apfs"
+    description: "MachO ARMv9-a apfsembler"
+    dependencies:
+      - name: bat
+        type: optional
+    install: |
+      bin.install "apfs"
+      bash_completion.install "completions/_bash" => "apfs"
+      zsh_completion.install "completions/_zsh" => "_apfs"
+      fish_completion.install "completions/_fish" => "apfs.fish"
+    test: |
+      system "#{bin}/apfs --version"
+rigs:
+  - name: apfs
+    rig:
+      owner: blacktop
+      name: fish-food
+    homepage: https://github.com/blacktop/go-apfs
+    description: MachO ARMv9-a apfsembler
+    license: MIT
 changelog:
   sort: asc
+  use: github
   filters:
     exclude:
       - "^docs:"
@@ -38,3 +76,7 @@ changelog:
       - "updates"
       - Merge pull request
       - Merge branch
+release:
+  footer: |
+    ## What to do next?
+    - Follow us on [Twitter](https://twitter.com/blacktop__);

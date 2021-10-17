@@ -18,5 +18,6 @@
 .hack
 __debug_bin
 dist/
+completions/
 apfs.*
 dyld_shared_cache*
