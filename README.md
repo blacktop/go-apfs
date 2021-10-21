@@ -19,7 +19,7 @@ go get github.com/blacktop/go-apfs
 Install
 
 ```bash
-go install github.com/blacktop/go-apfs/cmd/apfs
+go install github.com/blacktop/go-apfs/cmd/apfs@latest
 ```
 
 With [Homebrew](https://brew.sh)
