@@ -45,7 +45,7 @@ brews:
       name: homebrew-tap
     folder: Formula
     homepage: "https://github.com/blacktop/go-apfs"
-    description: "MachO ARMv9-a apfsembler"
+    description: "APFS parser written in pure Go"
     dependencies:
       - name: bat
         type: optional
@@ -62,7 +62,7 @@ rigs:
       owner: blacktop
       name: fish-food
     homepage: https://github.com/blacktop/go-apfs
-    description: MachO ARMv9-a apfsembler
+    description: APFS parser written in pure Go
     license: MIT
 changelog:
   sort: asc
