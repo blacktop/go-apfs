@@ -15,7 +15,6 @@
 # vendor/
 
 .vscode
-.hack
 __debug_bin
 dist/
 completions/

@@ -46,9 +46,6 @@ brews:
     folder: Formula
     homepage: "https://github.com/blacktop/go-apfs"
     description: "APFS parser written in pure Go"
-    dependencies:
-      - name: bat
-        type: optional
     install: |
       bin.install "apfs"
       bash_completion.install "completions/_bash" => "apfs"
