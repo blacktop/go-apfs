@@ -56,7 +56,6 @@ type decmpfsDiskHeader struct {
 	Magic            magic
 	CompressionType  compMethod
 	UncompressedSize uint64
-	_                byte
 }
 
 func (h DecmpfsDiskHeader) String() string {
@@ -121,6 +120,13 @@ func GetDecmpfsHeader(ne NodeEntry) (*DecmpfsDiskHeader, error) {
 			err := binary.Read(r, binary.LittleEndian, &hdr.decmpfsDiskHeader)
 			if err != nil {
 				return nil, err
+			}
+			if hdr.CompressionType == CMP_ATTR_UNCOMPRESSED {
+				// flag, err := r.ReadByte()
+				_, err = r.ReadByte()
+				if err != nil {
+					return nil, err
+				}
 			}
 			hdr.AttrBytes, err = ioutil.ReadAll(r)
 			if err != nil {
