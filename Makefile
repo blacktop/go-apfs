@@ -40,7 +40,7 @@ snapshot: ## Run goreleaser snapshot
 release: ## Create a new release from the NEXT_VERSION
 	@echo " > Creating Release ${NEXT_VERSION}"
 	@.hack/make/release ${NEXT_VERSION}
-	@goreleaser --rm-dist
+	@/Users/blacktop/Downloads/goreleaser_Darwin_all/goreleaser --rm-dist
 
 .PHONY: destroy
 destroy: ## Remove release for the CUR_VERSION

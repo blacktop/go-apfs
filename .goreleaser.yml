@@ -63,7 +63,7 @@ rigs:
     license: MIT
 changelog:
   sort: asc
-  use: github
+  use: github-native
   filters:
     exclude:
       - "^docs:"
