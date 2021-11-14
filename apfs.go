@@ -437,9 +437,16 @@ func (a *APFS) Copy(src, dest string) (err error) {
 		defer fo.Close()
 
 		if compressed {
-			w := bufio.NewWriter(fo)
-			if err := decmpfsHdr.DecompressFile(a.r, w, physBlockNum, length); err != nil {
-				return err
+			if decmpfsHdr.CompressionType == types.CMP_ATTR_UNCOMPRESSED {
+				if _, err := fo.Write(decmpfsHdr.AttrBytes); err != nil {
+					return err
+				}
+			} else {
+				w := bufio.NewWriter(fo)
+				if err := decmpfsHdr.DecompressFile(a.r, w, physBlockNum, length); err != nil {
+					return err
+				}
+				w.Flush()
 			}
 			if info, err := fo.Stat(); err == nil {
 				if info.Size() != int64(uncompressedSize) {

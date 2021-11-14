@@ -3,6 +3,7 @@ package types
 import (
 	"bufio"
 	"bytes"
+	"io/ioutil"
 
 	"compress/zlib"
 	"encoding/binary"
@@ -47,10 +48,15 @@ const (
 
 // DecmpfsDiskHeader this structure represents the xattr on disk; the fields below are little-endian
 type DecmpfsDiskHeader struct {
+	decmpfsDiskHeader
+	AttrBytes []byte
+}
+
+type decmpfsDiskHeader struct {
 	Magic            magic
 	CompressionType  compMethod
 	UncompressedSize uint64
-	AttrBytes        [0]byte
+	_                byte
 }
 
 func (h DecmpfsDiskHeader) String() string {
@@ -111,7 +117,13 @@ func GetDecmpfsHeader(ne NodeEntry) (*DecmpfsDiskHeader, error) {
 	var hdr DecmpfsDiskHeader
 	if ne.Hdr.GetType() == APFS_TYPE_XATTR {
 		if ne.Key.(JXattrKeyT).Name == DECMPFS_XATTR_NAME {
-			if err := binary.Read(bytes.NewReader(ne.Val.(JXattrValT).Data.([]byte)), binary.LittleEndian, &hdr); err != nil {
+			r := bytes.NewReader(ne.Val.(JXattrValT).Data.([]byte))
+			err := binary.Read(r, binary.LittleEndian, &hdr.decmpfsDiskHeader)
+			if err != nil {
+				return nil, err
+			}
+			hdr.AttrBytes, err = ioutil.ReadAll(r)
+			if err != nil {
 				return nil, err
 			}
 			return &hdr, nil
@@ -284,6 +296,16 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 		// if err := binary.Read(r, binary.BigEndian, &footer); err != nil {
 		// 	return err
 		// }
+	case CMP_ATTR_UNCOMPRESSED:
+		// data is in APFS_TYPE_XATTR data
+	case CMP_RSRC_UNCOMPRESSED:
+		buff := make([]byte, h.UncompressedSize)
+		if err := binary.Read(sr, binary.BigEndian, buff); err != nil {
+			return err
+		}
+		if _, err := decomp.Write(buff); err != nil {
+			return fmt.Errorf("failed to write uncompressed block: %w", err)
+		}
 	default:
 		return fmt.Errorf("unknown compression type: %s", h.CompressionType)
 	}
