@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-//go:generate stringer -type=j_obj_types,j_obj_kinds,dir_rec_flags,mode_t,dir_ent_file_type,bsd_flags_t -output j_string.go
+//go:generate stringer -type=j_obj_types,j_obj_kinds,dir_rec_flags,mode_t,dir_ent_file_type -output j_string.go
 
 type j_obj_types byte // FIXME: what type
 
@@ -323,6 +323,7 @@ const (
 	IMMUTABLE   bsd_flags_t = 0x00000002 /* file may not be changed */
 	APPEND      bsd_flags_t = 0x00000004 /* writes to file may only append */
 	OPAQUE      bsd_flags_t = 0x00000008 /* directory is opaque wrt. union */
+	NOUNLINK    bsd_flags_t = 0x00000010 // Reserved on macOS
 	/*
 	 * The following bit is reserved for FreeBSD.  It is not implemented
 	 * in Mac OS X.
@@ -349,11 +350,11 @@ const (
 	SF_APPEND     bsd_flags_t = 0x00040000 /* writes to file may only append */
 	SF_RESTRICTED bsd_flags_t = 0x00080000 /* entitlement required for writing */
 	SF_NOUNLINK   bsd_flags_t = 0x00100000 /* Item may not be removed, renamed or mounted on */
+	SF_SNAPSHOT   bsd_flags_t = 0x00200000 /* snapshot inode */
 	/*
 	 * The following two bits are reserved for FreeBSD.  They are not
 	 * implemented in Mac OS X.
 	 */
-	/* SNAPSHOT	0x00200000 */ /* snapshot inode */
 	/* NOTE: There is no SF_HIDDEN bit. */
 
 	SF_FIRMLINK bsd_flags_t = 0x00800000 /* file is a firmlink */
@@ -365,6 +366,62 @@ const (
 	 */
 	SF_DATALESS bsd_flags_t = 0x40000000 /* file is dataless object */
 )
+
+func (f bsd_flags_t) String() string {
+	var out []string
+	if f&NODUMP != 0 {
+		out = append(out, "UF_NODUMP")
+	}
+	if f&IMMUTABLE != 0 {
+		out = append(out, "UF_IMMUTABLE")
+	}
+	if f&APPEND != 0 {
+		out = append(out, "UF_APPEND")
+	}
+	if f&OPAQUE != 0 {
+		out = append(out, "UF_OPAQUE")
+	}
+	if f&NOUNLINK != 0 {
+		out = append(out, "UF_NOUNLINK")
+	}
+	if f&COMPRESSED != 0 {
+		out = append(out, "UF_COMPRESSED")
+	}
+	if f&TRACKED != 0 {
+		out = append(out, "UF_TRACKED")
+	}
+	if f&DATAVAULT != 0 {
+		out = append(out, "UF_DATAVAULT")
+	}
+	if f&HIDDEN != 0 {
+		out = append(out, "UF_HIDDEN")
+	}
+	if f&SF_ARCHIVED != 0 {
+		out = append(out, "SF_ARCHIVED")
+	}
+	if f&SF_IMMUTABLE != 0 {
+		out = append(out, "SF_IMMUTABLE")
+	}
+	if f&SF_APPEND != 0 {
+		out = append(out, "SF_APPEND")
+	}
+	if f&SF_RESTRICTED != 0 {
+		out = append(out, "SF_RESTRICTED")
+	}
+	if f&SF_NOUNLINK != 0 {
+		out = append(out, "SF_NOUNLINK")
+	}
+	if f&SF_SNAPSHOT != 0 {
+		out = append(out, "SF_SNAPSHOT")
+	}
+	if f&SF_FIRMLINK != 0 {
+		out = append(out, "SF_FIRMLINK")
+	}
+	if f&SF_DATALESS != 0 {
+		out = append(out, "SF_DATALESS")
+	}
+	return strings.Join(out, "|")
+}
 
 type j_inode_val_t struct {
 	ParentID               uint64
@@ -478,7 +535,7 @@ type JDrecVal struct {
 }
 
 func (v JDrecVal) String() string {
-	vout := fmt.Sprintf("file_id=%#x flags=%s, date_added=%s,",
+	vout := fmt.Sprintf("file_id=%#x flags=%s, date_added=%s",
 		v.FileID,
 		v.Flags.String(),
 		v.DateAdded,
