@@ -16,6 +16,7 @@ import (
 	"github.com/blacktop/go-apfs/pkg/disk/gpt"
 	"github.com/blacktop/go-apfs/types"
 	"github.com/blacktop/go-plist"
+	"github.com/fatih/color"
 
 	lzfse "github.com/blacktop/lzfse-cgo"
 	lru "github.com/hashicorp/golang-lru"
@@ -24,6 +25,8 @@ import (
 )
 
 const sectorSize = 0x200
+
+var diskReadColor = color.New(color.Faint, color.FgWhite).SprintfFunc()
 
 // DMG apple disk image object
 type DMG struct {
@@ -254,7 +257,7 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 				return err
 			}
 			total += n
-			log.Debugf("Wrote %#x bytes of ZERO_FILL data (output size: %#x)", n, total)
+			log.Debugf(diskReadColor("Wrote %#x bytes of ZERO_FILL data (output size: %#x)", n, total))
 		case UNCOMPRESSED:
 			buff = buff[:chunk.CompressedLength]
 			_, err = b.sr.ReadAt(buff, int64(chunk.CompressedOffset))
@@ -267,7 +270,7 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 				return err
 			}
 			total += n
-			log.Debugf("Wrote %#x bytes of UNCOMPRESSED data (output size: %#x)", n, total)
+			log.Debugf(diskReadColor("Wrote %#x bytes of UNCOMPRESSED data (output size: %#x)", n, total))
 		case IGNORED:
 
 			n, err = w.Write(make([]byte, chunk.DiskLength*udifSectorSize))
@@ -275,7 +278,7 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 				return err
 			}
 			total += n
-			log.Debugf("Wrote %#x bytes of IGNORED data (output size: %#x)", n, total)
+			log.Debugf(diskReadColor("Wrote %#x bytes of IGNORED data (output size: %#x)", n, total))
 		case COMPRESS_ADC:
 			buff = buff[:chunk.CompressedLength]
 			_, err = b.sr.ReadAt(buff, int64(chunk.CompressedOffset))
@@ -288,7 +291,7 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 				return err
 			}
 			total += n
-			log.Debugf("Wrote %#x bytes of COMPRESS_ADC data (output size: %#x)", n, total)
+			log.Debugf(diskReadColor("Wrote %#x bytes of COMPRESS_ADC data (output size: %#x)", n, total))
 		case COMPRESS_ZLIB:
 			buff = buff[:chunk.CompressedLength]
 			_, err = b.sr.ReadAt(buff, int64(chunk.CompressedOffset))
@@ -306,7 +309,7 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 			}
 			r.Close()
 			total += int(n)
-			log.Debugf("Wrote %#x bytes of COMPRESS_ZLIB data (output size: %#x)", n, total)
+			log.Debugf(diskReadColor("Wrote %#x bytes of COMPRESS_ZLIB data (output size: %#x)", n, total))
 		case COMPRESSS_BZ2:
 			buff = buff[:chunk.CompressedLength]
 			if _, err := b.sr.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
@@ -318,7 +321,7 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 				return err
 			}
 			total += int(n)
-			log.Debugf("Wrote %#x bytes of COMPRESSS_BZ2 data (output size: %#x)", n, total)
+			log.Debugf(diskReadColor("Wrote %#x bytes of COMPRESSS_BZ2 data (output size: %#x)", n, total))
 		case COMPRESSS_LZFSE:
 			buff = buff[:chunk.CompressedLength]
 			if _, err := b.sr.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
@@ -329,7 +332,7 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 				return err
 			}
 			total += n
-			log.Debugf("Wrote %#x bytes of COMPRESSS_LZFSE data (output size: %#x)", n, total)
+			log.Debugf(diskReadColor("Wrote %#x bytes of COMPRESSS_LZFSE data (output size: %#x)", n, total))
 		case COMPRESSS_LZMA:
 			return fmt.Errorf("COMPRESSS_LZMA is currently unsupported")
 		case COMMENT:
@@ -357,18 +360,18 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if n, err = out.Write(make([]byte, chunk.CompressedLength)); err != nil {
 			return -1, fmt.Errorf("failed to write ZERO_FILL data")
 		}
-		log.Debugf("Read %#x bytes of ZERO_FILL out", n)
+		log.Debugf(diskReadColor("Read %#x bytes of ZERO_FILL out", n))
 	case UNCOMPRESSED:
 		if nn, err = out.ReadFrom(io.NewSectionReader(r, int64(chunk.CompressedOffset), int64(chunk.CompressedLength))); err != nil {
 			return -1, fmt.Errorf("failed to write UNCOMPRESSED data")
 		}
 		n = int(nn)
-		log.Debugf("Read %#x bytes of UNCOMPRESSED data", n)
+		log.Debugf(diskReadColor("Read %#x bytes of UNCOMPRESSED data", n))
 	case IGNORED:
 		if n, err = out.Write(make([]byte, chunk.DiskLength*udifSectorSize)); err != nil {
 			return -1, fmt.Errorf("failed to write IGNORED data")
 		}
-		log.Debugf("Read %#x bytes of IGNORED outa", n)
+		log.Debugf(diskReadColor("Read %#x bytes of IGNORED outa", n))
 	case COMPRESS_ADC:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -377,7 +380,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if n, err = out.Write(adc.DecompressADC(in)); err != nil {
 			return -1, fmt.Errorf("failed to write COMPRESS_ADC data")
 		}
-		log.Debugf("Read %#x bytes of COMPRESS_ADC data", n)
+		log.Debugf(diskReadColor("Read %#x bytes of COMPRESS_ADC data", n))
 	case COMPRESS_ZLIB:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.DiskOffset)); err != nil {
@@ -392,7 +395,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 			return -1, fmt.Errorf("failed to write COMPRESS_ZLIB data")
 		}
 		n = int(nn)
-		log.Debugf("Read %#x bytes of COMPRESS_ZLIB data", n)
+		log.Debugf(diskReadColor("Read %#x bytes of COMPRESS_ZLIB data", n))
 	case COMPRESSS_BZ2:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -402,7 +405,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 			return -1, fmt.Errorf("failed to write COMPRESSS_BZ2 data")
 		}
 		n = int(nn)
-		log.Debugf("Read %#x bytes of COMPRESSS_BZ2 data", n)
+		log.Debugf(diskReadColor("Read %#x bytes of COMPRESSS_BZ2 data", n))
 	case COMPRESSS_LZFSE:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -411,7 +414,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if n, err = out.Write(lzfse.DecodeBuffer(in)); err != nil {
 			return -1, fmt.Errorf("failed to write COMPRESSS_LZFSE data")
 		}
-		log.Debugf("Read %#x bytes of COMPRESSS_LZFSE data", n)
+		log.Debugf(diskReadColor("Read %#x bytes of COMPRESSS_LZFSE data", n))
 	case COMPRESSS_LZMA:
 		return n, fmt.Errorf("COMPRESSS_LZMA is currently unsupported")
 	case COMMENT: // TODO: how to parse comments?

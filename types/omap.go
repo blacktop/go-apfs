@@ -177,7 +177,7 @@ type NodeEntry struct {
 func (ne NodeEntry) String() string {
 	var nout []string
 
-	nout = append(nout, fmt.Sprintf("%s oid=%#x", typeColor(ne.Hdr.GetType()), ne.Hdr.GetID()))
+	nout = append(nout, fmt.Sprintf("%s oid=%#x", TypeColor(ne.Hdr.GetType()), ne.Hdr.GetID()))
 
 	// switch off := ne.Offset.(type) {
 	// case KVOffT:
@@ -185,32 +185,6 @@ func (ne NodeEntry) String() string {
 	// case KVLocT:
 	// 	nout = append(nout, fmt.Sprintf("(key_off=%d, key_len=%d, val_off=%d, val_len=%d)", off.Key.Off, off.Key.Len, off.Val.Off, off.Val.Len))
 	// }
-
-	switch ne.Hdr.GetType() {
-	case APFS_TYPE_SNAP_METADATA:
-	case APFS_TYPE_EXTENT:
-	case APFS_TYPE_INODE:
-	case APFS_TYPE_XATTR:
-		nout = append(nout, fmt.Sprintf("name=%s", nameColor(ne.Key.(JXattrKeyT).Name)))
-	case APFS_TYPE_SIBLING_LINK:
-		nout = append(nout, fmt.Sprintf("sibling_id=%#x", ne.Key.(SiblingKeyT).SiblingID))
-	case APFS_TYPE_DSTREAM_ID:
-	case APFS_TYPE_CRYPTO_STATE:
-	case APFS_TYPE_FILE_EXTENT:
-		nout = append(nout, fmt.Sprintf("logical_addr=%#x", ne.Key.(j_file_extent_key_t).LogicalAddr))
-	case APFS_TYPE_DIR_REC:
-		nout = append(nout, fmt.Sprintf("name=%s, hash=%#x", nameColor(ne.Key.(JDrecHashedKeyT).Name), ne.Key.(JDrecHashedKeyT).Hash()))
-	case APFS_TYPE_DIR_STATS:
-	case APFS_TYPE_SNAP_NAME:
-		nout = append(nout, fmt.Sprintf("name=%s", nameColor(ne.Key.(j_snap_name_key_t).Name)))
-	case APFS_TYPE_SIBLING_MAP:
-	case APFS_TYPE_FILE_INFO:
-		nout = append(nout, fmt.Sprintf("lba=%#x, info=%s", ne.Key.(j_file_info_key_t).LBA(), ne.Key.(j_file_info_key_t).Info()))
-	}
-
-	if ne.PAddr > 0 {
-		nout = append(nout, fmt.Sprintf("paddr=%#x", ne.PAddr))
-	}
 
 	switch ne.Hdr.GetType() {
 	case APFS_TYPE_SNAP_METADATA:
@@ -309,6 +283,32 @@ func (ne NodeEntry) String() string {
 		case j_file_info_val_t:
 			nout = append(nout, val.String())
 		}
+	}
+
+	if ne.PAddr > 0 {
+		nout = append(nout, fmt.Sprintf("paddr=%#x", ne.PAddr))
+	}
+
+	switch ne.Hdr.GetType() {
+	case APFS_TYPE_SNAP_METADATA:
+	case APFS_TYPE_EXTENT:
+	case APFS_TYPE_INODE:
+	case APFS_TYPE_XATTR:
+		nout = append(nout, fmt.Sprintf("name=%s", nameColor(ne.Key.(JXattrKeyT).Name)))
+	case APFS_TYPE_SIBLING_LINK:
+		nout = append(nout, fmt.Sprintf("sibling_id=%#x", ne.Key.(SiblingKeyT).SiblingID))
+	case APFS_TYPE_DSTREAM_ID:
+	case APFS_TYPE_CRYPTO_STATE:
+	case APFS_TYPE_FILE_EXTENT:
+		nout = append(nout, fmt.Sprintf("logical_addr=%#x", ne.Key.(j_file_extent_key_t).LogicalAddr))
+	case APFS_TYPE_DIR_REC:
+		nout = append(nout, fmt.Sprintf("hash=%#06x, name=%s", ne.Key.(JDrecHashedKeyT).Hash(), nameColor(ne.Key.(JDrecHashedKeyT).Name)))
+	case APFS_TYPE_DIR_STATS:
+	case APFS_TYPE_SNAP_NAME:
+		nout = append(nout, fmt.Sprintf("name=%s", nameColor(ne.Key.(j_snap_name_key_t).Name)))
+	case APFS_TYPE_SIBLING_MAP:
+	case APFS_TYPE_FILE_INFO:
+		nout = append(nout, fmt.Sprintf("lba=%#x, info=%s", ne.Key.(j_file_info_key_t).LBA(), ne.Key.(j_file_info_key_t).Info()))
 	}
 
 	return strings.Join(nout, ", ")
