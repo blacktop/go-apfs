@@ -145,7 +145,7 @@ func VerifyChecksum(data []byte) bool {
 	return (sum2<<32)|sum1 != 0
 }
 
-var nameColor = color.New(color.Bold, color.FgHiBlue).SprintFunc()
+var NameColor = color.New(color.Bold, color.FgHiBlue).SprintFunc()
 var DirColor = color.New(color.Bold, color.FgHiBlue).SprintFunc()
 var TypeColor = color.New(color.Bold, color.FgHiYellow).SprintFunc()
 var timeColor = color.New(color.FgCyan).SprintFunc()

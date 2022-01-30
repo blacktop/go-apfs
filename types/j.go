@@ -323,13 +323,12 @@ const (
 	IMMUTABLE   bsd_flags_t = 0x00000002 /* file may not be changed */
 	APPEND      bsd_flags_t = 0x00000004 /* writes to file may only append */
 	OPAQUE      bsd_flags_t = 0x00000008 /* directory is opaque wrt. union */
-	NOUNLINK    bsd_flags_t = 0x00000010 // Reserved on macOS
 	/*
 	 * The following bit is reserved for FreeBSD.  It is not implemented
 	 * in Mac OS X.
 	 */
-	/* NOUNLINK	0x00000010 */ /* file may not be removed or renamed */
-	COMPRESSED                bsd_flags_t = 0x00000020 /* file is compressed (some file-systems) */
+	NOUNLINK   bsd_flags_t = 0x00000010 /* file may not be removed or renamed */
+	COMPRESSED bsd_flags_t = 0x00000020 /* file is compressed (some file-systems) */
 
 	/* UF_TRACKED is used for dealing with document IDs.  We no longer issue
 	 *  notifications for deletes or renames for files which have UF_TRACKED set. */
@@ -350,13 +349,12 @@ const (
 	SF_APPEND     bsd_flags_t = 0x00040000 /* writes to file may only append */
 	SF_RESTRICTED bsd_flags_t = 0x00080000 /* entitlement required for writing */
 	SF_NOUNLINK   bsd_flags_t = 0x00100000 /* Item may not be removed, renamed or mounted on */
-	SF_SNAPSHOT   bsd_flags_t = 0x00200000 /* snapshot inode */
 	/*
 	 * The following two bits are reserved for FreeBSD.  They are not
 	 * implemented in Mac OS X.
 	 */
 	/* NOTE: There is no SF_HIDDEN bit. */
-
+	SF_SNAPSHOT bsd_flags_t = 0x00200000 /* snapshot inode */
 	SF_FIRMLINK bsd_flags_t = 0x00800000 /* file is a firmlink */
 	/*
 	 * Synthetic flags.
@@ -369,6 +367,9 @@ const (
 
 func (f bsd_flags_t) String() string {
 	var out []string
+	if f == NONE {
+		out = append(out, "NONE")
+	}
 	if f&NODUMP != 0 {
 		out = append(out, "UF_NODUMP")
 	}

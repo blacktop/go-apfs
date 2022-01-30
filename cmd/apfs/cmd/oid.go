@@ -29,6 +29,7 @@ import (
 	"github.com/apex/log"
 	"github.com/blacktop/go-apfs"
 	"github.com/blacktop/go-apfs/pkg/disk/dmg"
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -58,6 +59,8 @@ var oidCmd = &cobra.Command{
 			log.SetLevel(log.DebugLevel)
 		}
 
+		color.NoColor = !cmd.Flag("color").Changed
+
 		dmgPath := filepath.Clean(args[0])
 
 		dev, err := dmg.Open(dmgPath, nil)
@@ -86,4 +89,5 @@ var oidCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(oidCmd)
+	oidCmd.Flags().Bool("color", false, "Force color output")
 }
