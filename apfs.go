@@ -140,14 +140,14 @@ func NewAPFS(dev disk.Device) (*APFS, error) {
 
 	fsRootEntry, err := a.fsOMapBtree.GetOMapEntry(a.r, a.Volume.RootTreeOid, a.volume.Hdr.Xid)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get root entry: %v", err)
 	}
 
 	log.Debugf("File System Root Entry: %s", fsRootEntry)
 
 	fsRootBtreeObj, err := types.ReadObj(a.r, fsRootEntry.Val.Paddr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read root btree: %v", err)
 	}
 
 	if root, ok := fsRootBtreeObj.Body.(types.BTreeNodePhys); ok {
@@ -194,6 +194,22 @@ func (a *APFS) getValidCSB() error {
 	return nil
 }
 
+func (a *APFS) OidInfo(oid uint64) error {
+
+	sr := io.NewSectionReader(a.r, 0, 1<<63-1)
+
+	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(oid), types.XidT(^uint64(0)))
+	if err != nil {
+		return fmt.Errorf("failed to get FS records for oid %#x: %v", types.OidT(oid), err)
+	}
+
+	for _, rec := range fsRecords {
+		fmt.Println(rec.String())
+	}
+
+	return nil
+}
+
 // List lists files at a given path
 func (a *APFS) List(path string) error {
 
@@ -201,7 +217,7 @@ func (a *APFS) List(path string) error {
 
 	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(types.FSROOT_OID), types.XidT(^uint64(0)))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get FS records for FSROOT_OID: %v", err)
 	}
 
 	parts := strings.FieldsFunc(path, func(c rune) bool {
@@ -216,7 +232,7 @@ func (a *APFS) List(path string) error {
 					if rec.Key.(types.JDrecHashedKeyT).Name == part {
 						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 						if err != nil {
-							return err
+							return fmt.Errorf("failed to get FS records for oid %#x: %v", types.OidT(rec.Val.(types.JDrecVal).FileID), err)
 						}
 						if idx == len(parts)-1 { // last part
 							switch rec.Val.(types.JDrecVal).Flags {
@@ -367,14 +383,14 @@ func (a *APFS) Copy(src, dest string) (err error) {
 
 	files, err := a.find(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to find %s: %v", src, err)
 	}
 
 	for _, rec := range files {
 
 		fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get fs records for %s: %v", src, err)
 		}
 
 		var length uint64
@@ -409,7 +425,7 @@ func (a *APFS) Copy(src, dest string) (err error) {
 				case types.XATTR_RESOURCEFORK_EA_NAME:
 					fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), types.XidT(^uint64(0)))
 					if err != nil {
-						return err
+						return fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), err)
 					}
 					for _, rec := range fsRecords {
 						switch rec.Hdr.GetType() {
@@ -421,7 +437,7 @@ func (a *APFS) Copy(src, dest string) (err error) {
 				case types.XATTR_DECMPFS_EA_NAME:
 					decmpfsHdr, err = types.GetDecmpfsHeader(rec)
 					if err != nil {
-						return err
+						return fmt.Errorf("failed to get decmpfs header: %v", err)
 					}
 				case types.XATTR_SYMLINK_EA_NAME:
 					symlink = string(rec.Val.(types.JXattrValT).Data.([]byte)[:])
@@ -432,19 +448,19 @@ func (a *APFS) Copy(src, dest string) (err error) {
 
 		fo, err := os.Create(filepath.Join(dest, fileName))
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create %s: %v", filepath.Join(dest, fileName), err)
 		}
 		defer fo.Close()
 
 		if compressed {
 			if decmpfsHdr.CompressionType == types.CMP_ATTR_UNCOMPRESSED {
 				if _, err := fo.Write(decmpfsHdr.AttrBytes); err != nil {
-					return err
+					return fmt.Errorf("failed to write %s: %v", filepath.Join(dest, fileName), err)
 				}
 			} else {
 				w := bufio.NewWriter(fo)
 				if err := decmpfsHdr.DecompressFile(a.r, w, physBlockNum, length); err != nil {
-					return err
+					return fmt.Errorf("failed to decompress and write %s: %v", filepath.Join(dest, fileName), err)
 				}
 				w.Flush()
 			}
@@ -478,7 +494,7 @@ func (a *APFS) find(path string) ([]types.NodeEntry, error) {
 
 	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(types.FSROOT_OID), types.XidT(^uint64(0)))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get fs records for FSROOT_OID: %v", err)
 	}
 
 	parts := strings.FieldsFunc(path, func(c rune) bool {
@@ -493,7 +509,7 @@ func (a *APFS) find(path string) ([]types.NodeEntry, error) {
 					if rec.Key.(types.JDrecHashedKeyT).Name == part {
 						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 						if err != nil {
-							return nil, err
+							return nil, fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JDrecVal).FileID), err)
 						}
 						if idx == len(parts)-1 { // last part
 							switch rec.Val.(types.JDrecVal).Flags {
@@ -507,14 +523,14 @@ func (a *APFS) find(path string) ([]types.NodeEntry, error) {
 							case types.DT_DIR:
 								fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 								if err != nil {
-									return nil, err
+									return nil, fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JDrecVal).FileID), err)
 								}
 								for _, dirRec := range fsRecords {
 									switch dirRec.Hdr.GetType() {
 									case types.APFS_TYPE_DIR_REC:
 										fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(dirRec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 										if err != nil {
-											return nil, err
+											return nil, fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(dirRec.Val.(types.JDrecVal).FileID), err)
 										}
 										for _, rec := range fsRecords {
 											switch rec.Hdr.GetType() {
