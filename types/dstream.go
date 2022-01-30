@@ -45,6 +45,11 @@ type j_file_extent_key_t struct {
 	LogicalAddr uint64
 }
 
+type FileExtent struct {
+	BlockAddr uint64
+	Length    uint64
+}
+
 type JFileExtentValT struct {
 	LenAndFlags  uint64
 	PhysBlockNum uint64
@@ -88,7 +93,7 @@ type JDstreamT struct {
 }
 
 func (d JDstreamT) String() string {
-	return fmt.Sprintf("size=%d, alloced_size=%d, default_crypto_id=%#x, total_bytes_written=%d, total_bytes_read=%d",
+	return fmt.Sprintf("size=%d, alloced_size=%#x, default_crypto_id=%#x, total_bytes_written=%d, total_bytes_read=%d",
 		d.Size,
 		d.AllocedSize,
 		d.DefaultCryptoID,
@@ -97,7 +102,14 @@ func (d JDstreamT) String() string {
 	)
 }
 
-type j_xattr_dstream_t struct {
+type JXattrDstreamT struct {
 	XattrObjID uint64
 	DStream    JDstreamT
+}
+
+func (d JXattrDstreamT) String() string {
+	return fmt.Sprintf("dstream_oid=%#x, %s",
+		d.XattrObjID,
+		d.DStream,
+	)
 }

@@ -531,13 +531,16 @@ func (val JXattrValT) String() string {
 		vout = append(vout, fmt.Sprintf("data_len=%#x", val.DataLen))
 		if val.DataLen == 0x10 {
 			var hdr DecmpfsDiskHeader
-			binary.Read(bytes.NewReader(val.Data.([]byte)), binary.LittleEndian, &hdr)
+			binary.Read(bytes.NewReader(val.Data.([]byte)), binary.LittleEndian, &hdr.decmpfsDiskHeader)
 			vout = append(vout, fmt.Sprintf("data={%s}\n%s", hdr, hexdumpColor(hex.Dump(val.Data.([]byte)))))
 		} else {
-			vout = append(vout, fmt.Sprintf("data=\n%s", hexdumpColor(hex.Dump(val.Data.([]byte))))) // FIXME: don't string print data
+			// FIXME: don't string print data
+			vout = append(vout, fmt.Sprintf("data=\n%s", hexdumpColor(hex.Dump(val.Data.([]byte)))))
 		}
+	} else if val.Flags.DataStream() {
+		vout = append(vout, val.Data.(JXattrDstreamT).String())
 	} else {
-		vout = append(vout, fmt.Sprintf("dstream_oid=%#x", val.Data.(uint64)))
+		vout = append(vout, fmt.Sprintf("data=\n%s", hexdumpColor(hex.Dump(val.Data.([]byte)))))
 	}
 
 	return strings.Join(vout, ", ")

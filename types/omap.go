@@ -177,7 +177,7 @@ type NodeEntry struct {
 func (ne NodeEntry) String() string {
 	var nout []string
 
-	nout = append(nout, fmt.Sprintf("%s oid=%d", typeColor(ne.Hdr.GetType()), ne.Hdr.GetID()))
+	nout = append(nout, fmt.Sprintf("%s oid=%#x", typeColor(ne.Hdr.GetType()), ne.Hdr.GetID()))
 
 	// switch off := ne.Offset.(type) {
 	// case KVOffT:

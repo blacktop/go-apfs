@@ -637,7 +637,7 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 				}
 				v.Data = dat
 			} else {
-				var val uint64
+				var val JXattrDstreamT
 				if err := binary.Read(r, binary.LittleEndian, &val); err != nil {
 					return fmt.Errorf("failed to read %T: %v", v, err)
 				}
