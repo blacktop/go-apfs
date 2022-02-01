@@ -121,13 +121,6 @@ func GetDecmpfsHeader(ne NodeEntry) (*DecmpfsDiskHeader, error) {
 			if err != nil {
 				return nil, err
 			}
-			if hdr.CompressionType == CMP_ATTR_UNCOMPRESSED {
-				// flag, err := r.ReadByte()
-				_, err = r.ReadByte()
-				if err != nil {
-					return nil, err
-				}
-			}
 			hdr.AttrBytes, err = ioutil.ReadAll(r)
 			if err != nil {
 				return nil, err
@@ -427,10 +420,11 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 			bar.Increment()
 		}
 		p.Wait()
+	case CMP_TYPE1:
+		fallthrough // TODO: confirm this is correct (do I still skip the first byte?)
 	case CMP_ATTR_UNCOMPRESSED:
-		// data is in APFS_TYPE_XATTR data
-		if _, err := decomp.Write(h.AttrBytes); err != nil {
-			return fmt.Errorf("failed to write CMP_ATTR_UNCOMPRESSED data: %w", err)
+		if _, err := decomp.Write(h.AttrBytes[1:]); err != nil { // TODO: figure out what the first byte is
+			return fmt.Errorf("failed to write CMP_ATTR_UNCOMPRESSED attr: %w", err)
 		}
 	case CMP_RSRC_UNCOMPRESSED:
 		buff := make([]byte, h.UncompressedSize)

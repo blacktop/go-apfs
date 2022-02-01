@@ -493,17 +493,12 @@ func (a *APFS) Copy(src, dest string) (err error) {
 		defer fo.Close()
 
 		if compressed {
-			if decmpfsHdr.CompressionType == types.CMP_ATTR_UNCOMPRESSED {
-				if _, err := fo.Write(decmpfsHdr.AttrBytes); err != nil {
-					return fmt.Errorf("failed to write %s: %v", filepath.Join(dest, fileName), err)
-				}
-			} else {
-				w := bufio.NewWriter(fo)
-				if err := decmpfsHdr.DecompressFile(a.r, w, fexts); err != nil {
-					return fmt.Errorf("failed to decompress and write %s: %v", filepath.Join(dest, fileName), err)
-				}
-				w.Flush()
+			w := bufio.NewWriter(fo)
+			if err := decmpfsHdr.DecompressFile(a.r, w, fexts); err != nil {
+				return fmt.Errorf("failed to decompress and write %s: %v", filepath.Join(dest, fileName), err)
 			}
+			w.Flush()
+
 			if info, err := fo.Stat(); err == nil {
 				if info.Size() != int64(uncompressedSize) {
 					log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), uncompressedSize)
