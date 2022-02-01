@@ -378,7 +378,7 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 	case APFS_TYPE_DSTREAM_ID:
 	case APFS_TYPE_CRYPTO_STATE:
 	case APFS_TYPE_FILE_EXTENT:
-		var k j_file_extent_key_t
+		var k JFileExtentKeyT
 		if err := binary.Read(r, binary.LittleEndian, &k); err != nil {
 			return fmt.Errorf("failed to read %T: %v", k, err)
 		}

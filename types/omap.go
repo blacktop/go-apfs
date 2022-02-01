@@ -300,7 +300,7 @@ func (ne NodeEntry) String() string {
 	case APFS_TYPE_DSTREAM_ID:
 	case APFS_TYPE_CRYPTO_STATE:
 	case APFS_TYPE_FILE_EXTENT:
-		nout = append(nout, fmt.Sprintf("logical_addr=%#x", ne.Key.(j_file_extent_key_t).LogicalAddr))
+		nout = append(nout, fmt.Sprintf("logical_addr=%#x", ne.Key.(JFileExtentKeyT).LogicalAddr))
 	case APFS_TYPE_DIR_REC:
 		nout = append(nout, fmt.Sprintf("hash=%#06x, name=%s", ne.Key.(JDrecHashedKeyT).Hash(), NameColor(ne.Key.(JDrecHashedKeyT).Name)))
 	case APFS_TYPE_DIR_STATS:

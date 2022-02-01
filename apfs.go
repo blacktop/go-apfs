@@ -2,6 +2,8 @@ package apfs
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -204,7 +206,31 @@ func (a *APFS) OidInfo(oid uint64) error {
 	}
 
 	for _, rec := range fsRecords {
-		fmt.Println(rec.String())
+		switch rec.Hdr.GetType() {
+		case types.APFS_TYPE_XATTR:
+			switch rec.Key.(types.JXattrKeyT).Name {
+			case types.XATTR_RESOURCEFORK_EA_NAME:
+				if rec.Val.(types.JXattrValT).Flags.DataEmbedded() {
+					fmt.Println(rec)
+				} else if rec.Val.(types.JXattrValT).Flags.DataStream() {
+					fmt.Println(rec)
+					fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID), types.XidT(^uint64(0)))
+					if err != nil {
+						return fmt.Errorf("failed to get fs records for dstream oid %#x: %v", types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID), err)
+					}
+					for _, rec := range fsRecords {
+						fmt.Printf("\t%s\n", rec)
+					}
+				}
+			case types.XATTR_SYMLINK_EA_NAME:
+				fmt.Println(rec)
+				fmt.Printf("\tsymlink=%s\n", types.NameColor(string(rec.Val.(types.JXattrValT).Data.([]byte)[:])))
+			}
+		case types.APFS_TYPE_DIR_REC:
+			fmt.Printf("\t%s\n", rec)
+		default:
+			fmt.Println(rec)
+		}
 	}
 
 	return nil
@@ -377,8 +403,9 @@ func (a *APFS) Tree(path string) error {
 // Copy copies the contents of the src file to the dest file TODO: finish this
 func (a *APFS) Copy(src, dest string) (err error) {
 
-	var decmpfsHdr *types.DecmpfsDiskHeader
 	var fsRecords types.FSRecords
+	var decmpfsHdr *types.DecmpfsDiskHeader
+
 	sr := io.NewSectionReader(a.r, 0, 1<<63-1)
 
 	files, err := a.find(src)
@@ -393,12 +420,11 @@ func (a *APFS) Copy(src, dest string) (err error) {
 			return fmt.Errorf("failed to get fs records for %s: %v", src, err)
 		}
 
-		var length uint64
-		var physBlockNum uint64
+		var symlink string
+		var fileName string
 		var uncompressedSize uint64
 		var totalBytesWritten uint64
-		var fileName string
-		var symlink string
+		var fexts []types.FileExtent
 
 		compressed := false
 
@@ -418,20 +444,34 @@ func (a *APFS) Copy(src, dest string) (err error) {
 					}
 				}
 			case types.APFS_TYPE_FILE_EXTENT:
-				length = rec.Val.(types.JFileExtentValT).Length()
-				physBlockNum = rec.Val.(types.JFileExtentValT).PhysBlockNum
+				fexts = append(fexts, types.FileExtent{
+					Address: rec.Key.(types.JFileExtentKeyT).LogicalAddr,
+					Block:   rec.Val.(types.JFileExtentValT).PhysBlockNum,
+					Length:  rec.Val.(types.JFileExtentValT).Length(),
+				})
 			case types.APFS_TYPE_XATTR:
 				switch rec.Key.(types.JXattrKeyT).Name {
 				case types.XATTR_RESOURCEFORK_EA_NAME:
-					fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), types.XidT(^uint64(0)))
-					if err != nil {
-						return fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), err)
-					}
-					for _, rec := range fsRecords {
-						switch rec.Hdr.GetType() {
-						case types.APFS_TYPE_FILE_EXTENT:
-							length = rec.Val.(types.JFileExtentValT).Length()
-							physBlockNum = rec.Val.(types.JFileExtentValT).PhysBlockNum
+					if rec.Val.(types.JXattrValT).Flags.DataEmbedded() {
+						binary.Read(bytes.NewReader(rec.Val.(types.JXattrValT).Data.([]byte)), binary.LittleEndian, &decmpfsHdr)
+					} else if rec.Val.(types.JXattrValT).Flags.DataStream() {
+						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(
+							sr,
+							a.FSRootBtree,
+							types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID),
+							types.XidT(^uint64(0)))
+						if err != nil {
+							return fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), err)
+						}
+						for _, rec := range fsRecords {
+							switch rec.Hdr.GetType() {
+							case types.APFS_TYPE_FILE_EXTENT:
+								fexts = append(fexts, types.FileExtent{
+									Address: rec.Key.(types.JFileExtentKeyT).LogicalAddr,
+									Block:   rec.Val.(types.JFileExtentValT).PhysBlockNum,
+									Length:  rec.Val.(types.JFileExtentValT).Length(),
+								})
+							}
 						}
 					}
 				case types.XATTR_DECMPFS_EA_NAME:
@@ -459,7 +499,7 @@ func (a *APFS) Copy(src, dest string) (err error) {
 				}
 			} else {
 				w := bufio.NewWriter(fo)
-				if err := decmpfsHdr.DecompressFile(a.r, w, physBlockNum, length); err != nil {
+				if err := decmpfsHdr.DecompressFile(a.r, w, fexts); err != nil {
 					return fmt.Errorf("failed to decompress and write %s: %v", filepath.Join(dest, fileName), err)
 				}
 				w.Flush()
@@ -471,8 +511,10 @@ func (a *APFS) Copy(src, dest string) (err error) {
 			}
 			log.Infof("Created %s", filepath.Join(dest, fileName))
 		} else {
-			if err := a.dev.ReadFile(bufio.NewWriter(fo), int64(physBlockNum*types.BLOCK_SIZE), int64(totalBytesWritten)); err != nil {
-				return fmt.Errorf("failed to write file data from device: %v", err)
+			for _, fext := range fexts {
+				if err := a.dev.ReadFile(bufio.NewWriter(fo), int64(fext.Block*types.BLOCK_SIZE), int64(totalBytesWritten)); err != nil {
+					return fmt.Errorf("failed to write file data from device: %v", err)
+				}
 			}
 			if info, err := fo.Stat(); err == nil {
 				if info.Size() != int64(totalBytesWritten) {

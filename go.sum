@@ -80,8 +80,8 @@ github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6r
 github.com/bgentry/speakeasy v0.1.0/go.mod h1:+zsyZBPWlz7T6j88CTgSN5bM796AkVf0kBD4zp0CCIs=
 github.com/blacktop/go-plist v1.0.1 h1:cbpYg6OYwSpJPLk8ObZW+norqxG5YInfPXRNcFw6n8I=
 github.com/blacktop/go-plist v1.0.1/go.mod h1:niIOeDMEBISbJ9w0PPuc67iLvLh7Ve0N1gAfxIRWSk4=
-github.com/blacktop/lzfse-cgo v1.1.17 h1:nJ40V26Zb3LT31RyCULr00GBVOx5SmcGYlFw+w821DI=
-github.com/blacktop/lzfse-cgo v1.1.17/go.mod h1:VoBC8Nle73KZg/4X9NW94jkFrQkNwQ18SMMu5ev8zSA=
+github.com/blacktop/lzfse-cgo v1.1.18 h1:mc/mHexTNgLVHAozlbM84B0ywPy470mQQWEeEw6QMcI=
+github.com/blacktop/lzfse-cgo v1.1.18/go.mod h1:VoBC8Nle73KZg/4X9NW94jkFrQkNwQ18SMMu5ev8zSA=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
 github.com/census-instrumentation/opencensus-proto v0.3.0/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
 github.com/cespare/xxhash v1.1.0/go.mod h1:XrSqR1VqqWfGrhpAt58auRo0WTKS1nRRg3ghfAqPWnc=

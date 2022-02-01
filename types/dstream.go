@@ -40,14 +40,15 @@ const (
 	J_FILE_EXTENT_FLAG_SHIFT = 56
 )
 
-type j_file_extent_key_t struct {
+type JFileExtentKeyT struct {
 	// Hdr         JKeyT
 	LogicalAddr uint64
 }
 
 type FileExtent struct {
-	BlockAddr uint64
-	Length    uint64
+	Address uint64
+	Block   uint64
+	Length  uint64
 }
 
 type JFileExtentValT struct {
