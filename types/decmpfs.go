@@ -40,6 +40,8 @@ const (
 	CMP_RSRC_UNCOMPRESSED compMethod = 10 // 64k chunked uncompressed data in resource fork
 	CMP_ATTR_LZFSE        compMethod = 11
 	CMP_RSRC_LZFSE        compMethod = 12 // 64k blocks
+	CMP_ATTR_LZBITMAP     compMethod = 13
+	CMP_RSRC_LZBITMAP     compMethod = 14 // 64k blocks
 
 	/* additional types defined in AppleFSCompression project */
 
@@ -435,7 +437,7 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 			return fmt.Errorf("failed to write CMP_RSRC_UNCOMPRESSED data: %w", err)
 		}
 	default:
-		return fmt.Errorf("unknown compression type: %s", h.CompressionType)
+		return fmt.Errorf("unknown or unsupported compression type: %s", h.CompressionType)
 	}
 
 	return nil
