@@ -236,6 +236,109 @@ func (a *APFS) OidInfo(oid uint64) error {
 	return nil
 }
 
+// Cat prints a file at a given path to stdout
+func (a *APFS) Cat(path string) error {
+	var fsRecords types.FSRecords
+	var decmpfsHdr *types.DecmpfsDiskHeader
+
+	sr := io.NewSectionReader(a.r, 0, 1<<63-1)
+
+	files, err := a.find(path)
+	if err != nil {
+		return fmt.Errorf("failed to find %s: %v", path, err)
+	}
+
+	for _, rec := range files {
+
+		fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
+		if err != nil {
+			return fmt.Errorf("failed to get fs records for %s: %v", path, err)
+		}
+
+		var symlink string
+		var fileName string
+		// var uncompressedSize uint64
+		var totalBytesWritten uint64
+		var fexts []types.FileExtent
+
+		compressed := false
+
+		for _, rec := range fsRecords {
+			switch rec.Hdr.GetType() {
+			case types.APFS_TYPE_INODE:
+				if rec.Val.(types.JInodeVal).InternalFlags&types.INODE_HAS_UNCOMPRESSED_SIZE != 0 {
+					compressed = true
+					// uncompressedSize = rec.Val.(types.JInodeVal).UncompressedSize
+				}
+				for _, xf := range rec.Val.(types.JInodeVal).Xfields {
+					switch xf.XType {
+					case types.INO_EXT_TYPE_NAME:
+						fileName = xf.Field.(string)
+					case types.INO_EXT_TYPE_DSTREAM:
+						totalBytesWritten = xf.Field.(types.JDstreamT).TotalBytesWritten
+					}
+				}
+			case types.APFS_TYPE_FILE_EXTENT:
+				fexts = append(fexts, types.FileExtent{
+					Address: rec.Key.(types.JFileExtentKeyT).LogicalAddr,
+					Block:   rec.Val.(types.JFileExtentValT).PhysBlockNum,
+					Length:  rec.Val.(types.JFileExtentValT).Length(),
+				})
+			case types.APFS_TYPE_XATTR:
+				switch rec.Key.(types.JXattrKeyT).Name {
+				case types.XATTR_RESOURCEFORK_EA_NAME:
+					if rec.Val.(types.JXattrValT).Flags.DataEmbedded() {
+						binary.Read(bytes.NewReader(rec.Val.(types.JXattrValT).Data.([]byte)), binary.LittleEndian, &decmpfsHdr)
+					} else if rec.Val.(types.JXattrValT).Flags.DataStream() {
+						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(
+							sr,
+							a.FSRootBtree,
+							types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID),
+							types.XidT(^uint64(0)))
+						if err != nil {
+							return fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), err)
+						}
+						for _, rec := range fsRecords {
+							switch rec.Hdr.GetType() {
+							case types.APFS_TYPE_FILE_EXTENT:
+								fexts = append(fexts, types.FileExtent{
+									Address: rec.Key.(types.JFileExtentKeyT).LogicalAddr,
+									Block:   rec.Val.(types.JFileExtentValT).PhysBlockNum,
+									Length:  rec.Val.(types.JFileExtentValT).Length(),
+								})
+							}
+						}
+					}
+				case types.XATTR_DECMPFS_EA_NAME:
+					decmpfsHdr, err = types.GetDecmpfsHeader(rec)
+					if err != nil {
+						return fmt.Errorf("failed to get decmpfs header: %v", err)
+					}
+				case types.XATTR_SYMLINK_EA_NAME:
+					symlink = string(rec.Val.(types.JXattrValT).Data.([]byte)[:])
+					fmt.Println(symlink)
+				}
+			}
+		}
+
+		if compressed {
+			w := bufio.NewWriter(os.Stdout)
+			if err := decmpfsHdr.DecompressFile(a.r, w, fexts); err != nil {
+				return fmt.Errorf("failed to decompress %s: %v", fileName, err)
+			}
+			w.Flush()
+		} else {
+			for _, fext := range fexts {
+				if err := a.dev.ReadFile(bufio.NewWriter(os.Stdout), int64(fext.Block*types.BLOCK_SIZE), int64(totalBytesWritten)); err != nil {
+					return fmt.Errorf("failed to write file data from device: %v", err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // List lists files at a given path
 func (a *APFS) List(path string) error {
 

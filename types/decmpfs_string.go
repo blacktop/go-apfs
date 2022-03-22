@@ -17,19 +17,21 @@ func _() {
 	_ = x[CMP_RSRC_UNCOMPRESSED-10]
 	_ = x[CMP_ATTR_LZFSE-11]
 	_ = x[CMP_RSRC_LZFSE-12]
+	_ = x[CMP_ATTR_LZBITMAP-13]
+	_ = x[CMP_RSRC_LZBITMAP-14]
 	_ = x[CMP_MAX-255]
 }
 
 const (
 	_compMethod_name_0 = "CMP_TYPE1"
 	_compMethod_name_1 = "CMP_ATTR_ZLIBCMP_RSRC_ZLIB"
-	_compMethod_name_2 = "CMP_ATTR_LZVNCMP_RSRC_LZVNCMP_ATTR_UNCOMPRESSEDCMP_RSRC_UNCOMPRESSEDCMP_ATTR_LZFSECMP_RSRC_LZFSE"
+	_compMethod_name_2 = "CMP_ATTR_LZVNCMP_RSRC_LZVNCMP_ATTR_UNCOMPRESSEDCMP_RSRC_UNCOMPRESSEDCMP_ATTR_LZFSECMP_RSRC_LZFSECMP_ATTR_LZBITMAPCMP_RSRC_LZBITMAP"
 	_compMethod_name_3 = "CMP_MAX"
 )
 
 var (
 	_compMethod_index_1 = [...]uint8{0, 13, 26}
-	_compMethod_index_2 = [...]uint8{0, 13, 26, 47, 68, 82, 96}
+	_compMethod_index_2 = [...]uint8{0, 13, 26, 47, 68, 82, 96, 113, 130}
 )
 
 func (i compMethod) String() string {
@@ -39,7 +41,7 @@ func (i compMethod) String() string {
 	case 3 <= i && i <= 4:
 		i -= 3
 		return _compMethod_name_1[_compMethod_index_1[i]:_compMethod_index_1[i+1]]
-	case 7 <= i && i <= 12:
+	case 7 <= i && i <= 14:
 		i -= 7
 		return _compMethod_name_2[_compMethod_index_2[i]:_compMethod_index_2[i+1]]
 	case i == 255:

@@ -30,10 +30,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// lsCmd represents the ls command
-var lsCmd = &cobra.Command{
-	Use:   "ls",
-	Short: "🚧 List files in APFS container",
+func init() {
+	rootCmd.AddCommand(catCmd)
+}
+
+// catCmd represents the cat command
+var catCmd = &cobra.Command{
+	Use:   "cat",
+	Short: "🚧 cat(1) file in APFS container",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 
@@ -54,19 +58,10 @@ var lsCmd = &cobra.Command{
 			return err
 		}
 
-		if len(args) > 1 {
-			if err := a.List(args[1]); err != nil {
-				return err
-			}
-		} else {
-			if err := a.List("/"); err != nil {
-				return err
-			}
+		if err := a.Cat(args[1]); err != nil {
+			return err
 		}
+
 		return nil
 	},
-}
-
-func init() {
-	rootCmd.AddCommand(lsCmd)
 }

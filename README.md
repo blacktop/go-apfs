@@ -71,6 +71,25 @@ DT_LNK - 06Jun21 03:01:53 - var
 DT_REG - 06Jun21 02:54:21 - .file
 ```
 
+#### Cat files
+
+```bash
+❯ apfs cat APFS.dmg /System/Library/FeatureFlags/Global.plist
+```
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+        <key>SiriUI</key>
+        <dict>
+                <key>Pym</key>
+                <dict>
+                        <key>Enabled</key>
+                        <true/>
+```
+
 #### Copy files
 
 ```bash
@@ -89,4 +108,4 @@ Supports up to version **2020-06-22** of the **APFS** [specification](https://de
 
 ## License
 
-Apache 2.0 Copyright (c) 2021 **blacktop**
+Apache 2.0 Copyright (c) 2022 **blacktop**
