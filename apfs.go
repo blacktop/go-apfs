@@ -323,7 +323,7 @@ func (a *APFS) Cat(path string) error {
 
 		if compressed {
 			w := bufio.NewWriter(os.Stdout)
-			if err := decmpfsHdr.DecompressFile(a.r, w, fexts); err != nil {
+			if err := decmpfsHdr.DecompressFile(a.r, w, fexts, true); err != nil {
 				return fmt.Errorf("failed to decompress %s: %v", fileName, err)
 			}
 			w.Flush()
@@ -597,7 +597,7 @@ func (a *APFS) Copy(src, dest string) (err error) {
 
 		if compressed {
 			w := bufio.NewWriter(fo)
-			if err := decmpfsHdr.DecompressFile(a.r, w, fexts); err != nil {
+			if err := decmpfsHdr.DecompressFile(a.r, w, fexts, false); err != nil {
 				return fmt.Errorf("failed to decompress and write %s: %v", filepath.Join(dest, fileName), err)
 			}
 			w.Flush()
