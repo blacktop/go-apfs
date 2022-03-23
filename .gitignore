@@ -19,4 +19,5 @@ __debug_bin
 dist/
 completions/
 apfs.*
+!apfs.go
 dyld_shared_cache*

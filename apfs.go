@@ -435,7 +435,7 @@ func (a *APFS) List(path string) error {
 		}
 	}
 
-	fmt.Println(fsRecords)
+	fmt.Print(fsRecords)
 
 	return nil
 }
