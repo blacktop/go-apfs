@@ -421,7 +421,7 @@ func (a *APFS) List(path string) error {
 									case types.APFS_TYPE_XATTR:
 										switch lnkRec.Key.(types.JXattrKeyT).Name {
 										case types.XATTR_SYMLINK_EA_NAME:
-											fmt.Printf("%s -> %s", rFile, string(lnkRec.Val.(types.JXattrValT).Data.([]byte)[:]))
+											fmt.Printf("%s -> %s\n", rFile, string(lnkRec.Val.(types.JXattrValT).Data.([]byte)[:]))
 										}
 									}
 								}
