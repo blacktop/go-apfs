@@ -53,14 +53,6 @@ brews:
       fish_completion.install "completions/_fish" => "apfs.fish"
     test: |
       system "#{bin}/apfs --version"
-rigs:
-  - name: apfs
-    rig:
-      owner: blacktop
-      name: fish-food
-    homepage: https://github.com/blacktop/go-apfs
-    description: APFS parser written in pure Go
-    license: MIT
 changelog:
   sort: asc
   use: github-native
