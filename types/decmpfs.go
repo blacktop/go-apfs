@@ -134,7 +134,7 @@ func GetDecmpfsHeader(ne NodeEntry) (*DecmpfsDiskHeader, error) {
 }
 
 // DecompressFile decompresses decmpfs data
-func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, fexts []FileExtent) (err error) {
+func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, fexts []FileExtent, nobar bool) (err error) {
 
 	var max int
 	var buff []byte
@@ -190,21 +190,25 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 			return fmt.Errorf("failed to read rsrc blocks: %v", err)
 		}
 
-		// initialize progress bar
-		p := mpb.New(mpb.WithWidth(80))
-		// adding a single bar, which will inherit container's width
-		bar := p.Add(int64(len(blocks)),
-			// progress bar filler with customized style
-			mpb.NewBarFiller(mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("|")),
-			mpb.PrependDecorators(
-				decor.Name("     ", decor.WC{W: len("     ") + 1, C: decor.DidentRight}),
-				// replace ETA decorator with "done" message, OnComplete event
-				decor.OnComplete(
-					decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 4}), "✅ ",
+		var p *mpb.Progress
+		var bar *mpb.Bar
+		if !nobar {
+			// initialize progress bar
+			p = mpb.New(mpb.WithWidth(80))
+			// adding a single bar, which will inherit container's width
+			bar = p.Add(int64(len(blocks)),
+				// progress bar filler with customized style
+				mpb.NewBarFiller(mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("|")),
+				mpb.PrependDecorators(
+					decor.Name("     ", decor.WC{W: len("     ") + 1, C: decor.DidentRight}),
+					// replace ETA decorator with "done" message, OnComplete event
+					decor.OnComplete(
+						decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 4}), "✅ ",
+					),
 				),
-			),
-			mpb.AppendDecorators(decor.Percentage()),
-		)
+				mpb.AppendDecorators(decor.Percentage()),
+			)
+		}
 
 		for _, blk := range blocks {
 			totalSize += int(blk.Size)
@@ -238,9 +242,9 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 			} else {
 				return fmt.Errorf("found unknown chunk type data in resource fork compressed data for block %d", idx)
 			}
-			bar.Increment()
+			if !nobar { bar.Increment() }
 		}
-		p.Wait()
+		if !nobar { p.Wait() }
 	case CMP_ATTR_LZVN:
 		if h.AttrBytes[0] == 0x06 { // uncompressed attr
 			if _, err := decomp.Write(h.AttrBytes[1:]); err != nil {
@@ -288,21 +292,25 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 		}
 		buff = make([]byte, 0, max)
 
-		// initialize progress bar
-		p := mpb.New(mpb.WithWidth(80))
-		// adding a single bar, which will inherit container's width
-		bar := p.Add(int64(len(blocks)),
-			// progress bar filler with customized style
-			mpb.NewBarFiller(mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("|")),
-			mpb.PrependDecorators(
-				decor.Name("     ", decor.WC{W: len("     ") + 1, C: decor.DidentRight}),
-				// replace ETA decorator with "done" message, OnComplete event
-				decor.OnComplete(
-					decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 4}), "✅ ",
+		var p *mpb.Progress
+		var bar *mpb.Bar
+		if !nobar {
+			// initialize progress bar
+			p = mpb.New(mpb.WithWidth(80))
+			// adding a single bar, which will inherit container's width
+			bar = p.Add(int64(len(blocks)),
+				// progress bar filler with customized style
+				mpb.NewBarFiller(mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("|")),
+				mpb.PrependDecorators(
+					decor.Name("     ", decor.WC{W: len("     ") + 1, C: decor.DidentRight}),
+					// replace ETA decorator with "done" message, OnComplete event
+					decor.OnComplete(
+						decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 4}), "✅ ",
+					),
 				),
-			),
-			mpb.AppendDecorators(decor.Percentage()),
-		)
+				mpb.AppendDecorators(decor.Percentage()),
+			)
+		}
 
 		// 64k blocks
 		dec := make([]byte, 0x10000)
@@ -331,9 +339,9 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 				}
 				total += nn
 			}
-			bar.Increment()
+			if !nobar { bar.Increment() }
 		}
-		p.Wait()
+		if !nobar { p.Wait() }
 	case CMP_ATTR_LZFSE:
 		if h.AttrBytes[0] == 0x06 { // uncompressed attr
 			if _, err := decomp.Write(h.AttrBytes[1:]); err != nil {
@@ -377,21 +385,25 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 		}
 		buff = make([]byte, 0, max)
 
-		// initialize progress bar
-		p := mpb.New(mpb.WithWidth(80))
-		// adding a single bar, which will inherit container's width
-		bar := p.Add(int64(len(blocks)),
-			// progress bar filler with customized style
-			mpb.NewBarFiller(mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("|")),
-			mpb.PrependDecorators(
-				decor.Name("     ", decor.WC{W: len("     ") + 1, C: decor.DidentRight}),
-				// replace ETA decorator with "done" message, OnComplete event
-				decor.OnComplete(
-					decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 4}), "✅ ",
+		var p *mpb.Progress
+		var bar *mpb.Bar
+		if !nobar {
+			// initialize progress bar
+			p = mpb.New(mpb.WithWidth(80))
+			// adding a single bar, which will inherit container's width
+			bar = p.Add(int64(len(blocks)),
+				// progress bar filler with customized style
+				mpb.NewBarFiller(mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("|")),
+				mpb.PrependDecorators(
+					decor.Name("     ", decor.WC{W: len("     ") + 1, C: decor.DidentRight}),
+					// replace ETA decorator with "done" message, OnComplete event
+					decor.OnComplete(
+						decor.AverageETA(decor.ET_STYLE_GO, decor.WC{W: 4}), "✅ ",
+					),
 				),
-			),
-			mpb.AppendDecorators(decor.Percentage()),
-		)
+				mpb.AppendDecorators(decor.Percentage()),
+			)
+		}
 
 		// 64k blocks
 		for idx, total := 0, 0; idx < len(blocks) || uint64(total) < h.UncompressedSize; idx++ {
@@ -419,9 +431,9 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 				}
 				total += nn
 			}
-			bar.Increment()
+			if !nobar { bar.Increment() }
 		}
-		p.Wait()
+		if !nobar { p.Wait() }
 	case CMP_TYPE1:
 		fallthrough // TODO: confirm this is correct (do I still skip the first byte?)
 	case CMP_ATTR_UNCOMPRESSED:

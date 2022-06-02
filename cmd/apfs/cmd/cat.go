@@ -38,7 +38,7 @@ func init() {
 var catCmd = &cobra.Command{
 	Use:   "cat",
 	Short: "🚧 cat(1) file in APFS container",
-	Args:  cobra.MinimumNArgs(1),
+	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		if Verbose {
@@ -58,8 +58,10 @@ var catCmd = &cobra.Command{
 			return err
 		}
 
-		if err := a.Cat(args[1]); err != nil {
-			return err
+		for i := 1; i < len(args); i++ {
+			if err := a.Cat(args[i]); err != nil {
+				return err
+			}
 		}
 
 		return nil
