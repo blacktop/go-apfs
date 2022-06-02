@@ -65,10 +65,10 @@ jobs:
           version: latest
           args: release --rm-dist -f .goreleaser.windows.yml
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_SCOOP }}
       -
         if: matrix.platform == 'ubuntu-latest'
-        name: Upload assets
+        name: Upload assets (Linux)
         uses: actions/upload-artifact@v3
         with:
           name: apfs_linux
@@ -82,7 +82,7 @@ jobs:
       #     path: dist/*
       -
         if: matrix.platform == 'windows-latest'
-        name: Upload assets
+        name: Upload assets (Windows)
         uses: actions/upload-artifact@v3
         with:
           name: apfs_windows
