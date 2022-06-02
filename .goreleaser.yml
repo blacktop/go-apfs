@@ -77,7 +77,7 @@ changelog:
     exclude:
       - "^docs:"
       - "^test:"
-      - '^chore'
+      - '^chore:'
       - "^bumping"
       - "^Update"
       - "^Delete"
