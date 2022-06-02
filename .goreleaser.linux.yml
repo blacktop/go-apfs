@@ -15,6 +15,9 @@ builds:
       - linux
     goarch:
       - amd64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
   - main: ./cmd/apfs
     id: arm64
     binary: apfs
@@ -25,12 +28,16 @@ builds:
       - linux
     goarch:
       - arm64
-
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
 archives:
   - replacements:
       amd64: x86_64
     name_template: "apfs_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
+      - README.md
+      - LICENSE
       - completions/*
 
 checksum:
@@ -51,3 +58,37 @@ changelog:
       - "updates"
       - Merge pull request
       - Merge branch
+
+nfpms:
+  - id: packages
+    homepage:  https://github.com/blacktop/go-apfs
+    description: |-
+      APFS parser written in pure Go.
+    maintainer: Blacktop <https://github.com/blacktop>
+    license: MIT
+    vendor: Blacktop
+    bindir: /usr/bin
+    section: utils
+    contents:
+      - src: ./completions/_bash
+        dst: /usr/share/bash-completion/completions/apfs
+        file_info:
+          mode: 0644
+      - src: ./completions/_fish
+        dst: /usr/share/fish/completions/apfs.fish
+        file_info:
+          mode: 0644
+      - src: ./completions/_zsh
+        dst:  /usr/share/zsh/vendor-completions/_apfs
+        file_info:
+          mode: 0644
+      - src: ./LICENSE
+        dst: /usr/share/doc/ipsw/copyright
+        file_info:
+          mode: 0644
+    replacements:
+      amd64: x86_64
+    formats:
+    - apk
+    - deb
+    - rpm

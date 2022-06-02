@@ -16,6 +16,9 @@ builds:
     goarch:
       - amd64
       - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
 universal_binaries:
   - id: darwin
     replace: true
@@ -30,6 +33,8 @@ archives:
       - goos: windows
         format: zip
     files:
+      - README.md
+      - LICENSE
       - completions/*
 checksum:
   name_template: "checksums.darwin.txt"
@@ -55,18 +60,37 @@ brews:
       system "#{bin}/apfs --version"
 changelog:
   sort: asc
-  use: github-native
+  use: github
+  groups:
+    - title: "New Features and updates"
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "Bug fixes"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 10
+    - title: 'Documentation updates'
+      regexp: "^.*docs[(\\w)]*:+.*$"
+      order: 20
+    - title: Other work
+      order: 999
   filters:
     exclude:
       - "^docs:"
       - "^test:"
+      - '^chore'
       - "^bumping"
       - "^Update"
+      - "^Delete"
+      - "^Working"
       - "reorg"
       - "updates"
+      - 'merge conflict'
       - Merge pull request
+      - Merge remote-tracking branch
       - Merge branch
 release:
   footer: |
+    ### Summary
+    **Full Changelog**: https://github.com/blacktop/ipsw/compare/{{ .PreviousTag }}...{{ .Tag }}
     ## What to do next?
-    - Follow us on [Twitter](https://twitter.com/blacktop__);
+    - Follow us on [Twitter](https://twitter.com/blacktop__)
