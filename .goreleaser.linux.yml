@@ -83,7 +83,7 @@ nfpms:
         file_info:
           mode: 0644
       - src: ./LICENSE
-        dst: /usr/share/doc/ipsw/copyright
+        dst: /usr/share/doc/apfs/copyright
         file_info:
           mode: 0644
     replacements:
