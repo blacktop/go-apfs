@@ -26,7 +26,6 @@ import (
 
 	"github.com/apex/log"
 	"github.com/blacktop/go-apfs"
-	"github.com/blacktop/go-apfs/pkg/disk/dmg"
 	"github.com/spf13/cobra"
 )
 
@@ -41,18 +40,13 @@ var lsCmd = &cobra.Command{
 			log.SetLevel(log.DebugLevel)
 		}
 
-		dmgPath := filepath.Clean(args[0])
+		fpath := filepath.Clean(args[0])
 
-		dev, err := dmg.Open(dmgPath, nil)
+		a, err := apfs.Open(fpath)
 		if err != nil {
 			return err
 		}
-		defer dev.Close()
-
-		a, err := apfs.NewAPFS(dev)
-		if err != nil {
-			return err
-		}
+		defer a.Close()
 
 		if len(args) > 1 {
 			if err := a.List(args[1]); err != nil {
@@ -63,6 +57,7 @@ var lsCmd = &cobra.Command{
 				return err
 			}
 		}
+
 		return nil
 	},
 }

@@ -463,7 +463,11 @@ func NewDMG(r *os.File) (*DMG, error) {
 	}
 
 	if d.Footer.Signature.String() != udifRFSignature {
-		return nil, fmt.Errorf("found unexpected UDIFResourceFile signure: %s, expected: %s", d.Footer.Signature.String(), udifRFSignature)
+		var sigStr string
+		if len(d.Footer.Signature.String()) > 0 {
+			sigStr = fmt.Sprintf(" (%s)", d.Footer.Signature.String())
+		}
+		return nil, fmt.Errorf("found unexpected UDIFResourceFile signure: got %x%s, expected %s", d.Footer.Signature, sigStr, udifRFSignature)
 	}
 
 	// TODO: parse Code Signnature

@@ -13,6 +13,8 @@ import (
 
 	"github.com/apex/log"
 	"github.com/blacktop/go-apfs/pkg/disk"
+	"github.com/blacktop/go-apfs/pkg/disk/dmg"
+	"github.com/blacktop/go-apfs/pkg/disk/raw"
 	"github.com/blacktop/go-apfs/types"
 )
 
@@ -34,20 +36,50 @@ type APFS struct {
 	closer io.Closer
 }
 
-// // Open opens the named file using os.Open and prepares it for use as an APFS.
-// func Open(name string) (*APFS, error) {
-// 	f, err := os.Open(name)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	ff, err := NewAPFS(f)
-// 	if err != nil {
-// 		f.Close()
-// 		return nil, err
-// 	}
-// 	ff.closer = f
-// 	return ff, nil
-// }
+// Open opens the named file using os.Open and prepares it for use as an APFS.
+func Open(name string) (*APFS, error) {
+	var ff *APFS
+
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+
+	fsType, err := detectFilesystem(f)
+	if err != nil {
+		return nil, err
+	}
+
+	switch fsType {
+	case DMG:
+		dev, err := dmg.NewDMG(f)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open DMG: %v", err)
+		}
+		ff, err = NewAPFS(dev)
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+	case APFS_RAW:
+		ra, err := raw.NewRaw(f)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open APFS raw image: %v", err)
+		}
+		ff, err = NewAPFS(ra)
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+	case HFS:
+		return nil, fmt.Errorf("HFS+ is not supported")
+	default:
+		return nil, fmt.Errorf("unknown filesystem type")
+	}
+
+	ff.closer = f
+	return ff, nil
+}
 
 // Close closes the APFS.
 // If the APFS was created using NewFile directly instead of Open,
