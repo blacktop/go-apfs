@@ -50,11 +50,11 @@ var extractCmd = &cobra.Command{
 
 		dmgPath := filepath.Clean(args[0])
 
-		dev, err := dmg.Open(dmgPath, &dmg.Config{DisableCache: true})
+		d, err := dmg.Open(dmgPath, &dmg.Config{DisableCache: true})
 		if err != nil {
 			return err
 		}
-		defer dev.Close()
+		defer d.Close()
 
 		var g gpt.GUIDPartitionTable
 

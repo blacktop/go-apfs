@@ -449,10 +449,14 @@ func Open(name string, c *Config) (*DMG, error) {
 
 // NewDMG creates a new DMG for accessing a dmg in an underlying reader.
 // The dmg is expected to start at position 0 in the ReaderAt.
-func NewDMG(r *os.File) (*DMG, error) {
+func NewDMG(r *os.File, c ...*Config) (*DMG, error) {
 
 	d := new(DMG)
 	d.sr = io.NewSectionReader(r, 0, 1<<63-1)
+
+	if len(c) > 0 { // if we have a config, use it
+		d.config = *c[0]
+	}
 
 	if _, err := r.Seek(int64(-binary.Size(UDIFResourceFile{})), io.SeekEnd); err != nil {
 		return nil, fmt.Errorf("failed to seek to DMG footer: %v", err)

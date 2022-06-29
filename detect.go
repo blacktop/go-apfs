@@ -30,7 +30,6 @@ func checkDMG(f *os.File) bool {
 	f.Seek(0, io.SeekStart) // rewind file
 	if _, err := dmg.NewDMG(f); err != nil {
 		return false
-
 	}
 	return true
 }
