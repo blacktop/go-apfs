@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/spf13/cobra v1.4.0
 	github.com/spf13/viper v1.12.0
-	github.com/vbauerster/mpb/v7 v7.4.2
+	github.com/vbauerster/mpb/v7 v7.5.2
 )
 
 require (
