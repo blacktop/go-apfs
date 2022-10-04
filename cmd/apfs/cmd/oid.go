@@ -28,7 +28,6 @@ import (
 
 	"github.com/apex/log"
 	"github.com/blacktop/go-apfs"
-	"github.com/blacktop/go-apfs/pkg/disk/dmg"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -61,18 +60,13 @@ var oidCmd = &cobra.Command{
 
 		color.NoColor = !cmd.Flag("color").Changed
 
-		dmgPath := filepath.Clean(args[0])
+		fpath := filepath.Clean(args[0])
 
-		dev, err := dmg.Open(dmgPath, nil)
+		a, err := apfs.Open(fpath)
 		if err != nil {
 			return err
 		}
-		defer dev.Close()
-
-		a, err := apfs.NewAPFS(dev)
-		if err != nil {
-			return err
-		}
+		defer a.Close()
 
 		oid, err := ConvertStrToInt(args[1])
 		if err != nil {

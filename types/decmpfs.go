@@ -242,9 +242,13 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 			} else {
 				return fmt.Errorf("found unknown chunk type data in resource fork compressed data for block %d", idx)
 			}
-			if !nobar { bar.Increment() }
+			if !nobar {
+				bar.Increment()
+			}
 		}
-		if !nobar { p.Wait() }
+		if !nobar {
+			p.Wait()
+		}
 	case CMP_ATTR_LZVN:
 		if h.AttrBytes[0] == 0x06 { // uncompressed attr
 			if _, err := decomp.Write(h.AttrBytes[1:]); err != nil {
@@ -339,9 +343,13 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 				}
 				total += nn
 			}
-			if !nobar { bar.Increment() }
+			if !nobar {
+				bar.Increment()
+			}
 		}
-		if !nobar { p.Wait() }
+		if !nobar {
+			p.Wait()
+		}
 	case CMP_ATTR_LZFSE:
 		if h.AttrBytes[0] == 0x06 { // uncompressed attr
 			if _, err := decomp.Write(h.AttrBytes[1:]); err != nil {
@@ -431,9 +439,13 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 				}
 				total += nn
 			}
-			if !nobar { bar.Increment() }
+			if !nobar {
+				bar.Increment()
+			}
 		}
-		if !nobar { p.Wait() }
+		if !nobar {
+			p.Wait()
+		}
 	case CMP_TYPE1:
 		fallthrough // TODO: confirm this is correct (do I still skip the first byte?)
 	case CMP_ATTR_UNCOMPRESSED:
@@ -448,6 +460,10 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 		if _, err := decomp.Write(buff); err != nil {
 			return fmt.Errorf("failed to write CMP_RSRC_UNCOMPRESSED data: %w", err)
 		}
+	case CMP_ATTR_LZBITMAP:
+		return fmt.Errorf("support for CMP_ATTR_LZBITMAP not implemented")
+	case CMP_RSRC_LZBITMAP:
+		return fmt.Errorf("support for CMP_RSRC_LZBITMAP not implemented")
 	default:
 		return fmt.Errorf("unknown or unsupported compression type: %s", h.CompressionType)
 	}

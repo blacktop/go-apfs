@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/apex/log"
@@ -25,11 +26,10 @@ type APFS struct {
 	Volume      *types.ApfsSuperblock
 	FSRootBtree types.BTreeNodePhys
 
-	nxsb            *types.Obj // Container
-	checkPointDesc  []*types.Obj
-	validCheckPoint *types.Obj
-	volume          *types.Obj
-	fsOMapBtree     *types.BTreeNodePhys
+	nxsb           *types.Obj // Container
+	checkPointDesc []*types.Obj
+	volume         *types.Obj
+	fsOMapBtree    *types.BTreeNodePhys
 
 	dev    disk.Device
 	r      io.ReaderAt
@@ -52,15 +52,19 @@ func Open(name string) (*APFS, error) {
 
 	switch fsType {
 	case DMG:
-		dev, err := dmg.NewDMG(f)
+		dev, err := dmg.NewDMG(f, &dmg.Config{DisableCache: true})
 		if err != nil {
 			return nil, fmt.Errorf("failed to open DMG: %v", err)
+		}
+		if err := dev.Load(); err != nil {
+			return nil, fmt.Errorf("failed to load DMG: %v", err)
 		}
 		ff, err = NewAPFS(dev)
 		if err != nil {
 			f.Close()
 			return nil, err
 		}
+		ff.closer = f
 	case APFS_RAW:
 		ra, err := raw.NewRaw(f)
 		if err != nil {
@@ -160,9 +164,10 @@ func NewAPFS(dev disk.Device) (*APFS, error) {
 					"sub_type": a.volume.Hdr.GetSubType(),
 					"flag":     a.volume.Hdr.GetFlag(),
 				}).Debug(fmt.Sprintf("APFS Volume (%s)", string(vol.VolumeName[:])))
-
 				a.Volume = &vol
 			}
+		} else {
+			return nil, fmt.Errorf("failed to parse omap.tree.entry.omap (volume)")
 		}
 	}
 
@@ -170,6 +175,8 @@ func NewAPFS(dev disk.Device) (*APFS, error) {
 
 	if ombtree, ok := a.Volume.OMap.Body.(types.OMap).Tree.Body.(types.BTreeNodePhys); ok {
 		a.fsOMapBtree = &ombtree
+	} else {
+		return nil, fmt.Errorf("failed to parse omap.tree.body (btree)")
 	}
 
 	fsRootEntry, err := a.fsOMapBtree.GetOMapEntry(a.r, a.Volume.RootTreeOid, a.volume.Hdr.Xid)
@@ -179,30 +186,31 @@ func NewAPFS(dev disk.Device) (*APFS, error) {
 
 	log.Debugf("File System Root Entry: %s", fsRootEntry)
 
+	// if fsRootEntry.Val.Flags&types.OMAP_VAL_NOHEADER == 0 {
 	fsRootBtreeObj, err := types.ReadObj(a.r, fsRootEntry.Val.Paddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read root btree: %v", err)
 	}
-
 	if root, ok := fsRootBtreeObj.Body.(types.BTreeNodePhys); ok {
 		a.FSRootBtree = root
+	} else {
+		return nil, fmt.Errorf("failed to parse root btree")
 	}
-
+	// } else {
+	// 	a.FSRootBtree = *a.fsOMapBtree // FIXME: this is prob where the bug is
+	// }
 	return a, nil
 }
 
 // getValidCSB returns the container superblock that has the largest transaction identifier and isnʼt malformed
 func (a *APFS) getValidCSB() error {
 
-	nxsb := a.nxsb.Body.(types.NxSuperblock)
-
-	if (nxsb.XpDescBlocks >> 31) != 0 {
+	if (a.Container.XpDescBlocks >> 31) != 0 {
 		return fmt.Errorf("unable to parse non-contiguous checkpoint descriptor area")
 	}
-	xpDescBlocks := nxsb.XpDescBlocks & ^(uint32(1) << 31)
 
-	for i := uint32(0); i < xpDescBlocks; i++ {
-		o, err := types.ReadObj(a.r, nxsb.XpDescBase+uint64(i))
+	for i := uint32(0); i < a.Container.XpDescBlocks; i++ {
+		o, err := types.ReadObj(a.r, a.Container.XpDescBase+uint64(i))
 		if err != nil {
 			if errors.Is(err, types.ErrBadBlockChecksum) {
 				log.Debug(fmt.Sprintf("checkpoint block at index %d failed checksum validation. Skipping...", i))
@@ -213,16 +221,19 @@ func (a *APFS) getValidCSB() error {
 		a.checkPointDesc = append(a.checkPointDesc, o)
 	}
 
-	a.validCheckPoint = a.checkPointDesc[len(a.checkPointDesc)-1]
+	sort.Slice(a.checkPointDesc[:], func(i, j int) bool {
+		return a.checkPointDesc[i].Hdr.Xid < a.checkPointDesc[j].Hdr.Xid
+	})
 
-	if nxsb, ok := a.validCheckPoint.Body.(types.NxSuperblock); ok {
-		a.Valid = &nxsb
-	}
-
-	if a.Valid.XpDescIndex+a.Valid.XpDescLen <= xpDescBlocks { // TODO: remove this
-		log.Debug("contiguous")
-	} else {
-		log.Warn("shizzzz")
+	for i := len(a.checkPointDesc) - 1; i >= 0; i-- {
+		if a.checkPointDesc[i].Hdr.GetType() == types.OBJECT_TYPE_NX_SUPERBLOCK {
+			if nxsb, ok := a.checkPointDesc[i].Body.(types.NxSuperblock); ok {
+				a.Valid = &nxsb
+				break
+			} else {
+				return fmt.Errorf("invalid checkpoint descriptor")
+			}
+		}
 	}
 
 	return nil

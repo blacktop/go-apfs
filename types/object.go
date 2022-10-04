@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/apex/log"
 )
 
 //go:generate stringer -type=objType,objFlag -output object_string.go
@@ -165,6 +167,9 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 			}
 		}
 		o.Body = nxsb
+	case OBJECT_TYPE_INVALID:
+		log.Debug("this better be for a OMAP_VAL_NOHEADER")
+		fallthrough
 	case OBJECT_TYPE_BTREE:
 		fallthrough
 	case OBJECT_TYPE_BTREE_NODE:

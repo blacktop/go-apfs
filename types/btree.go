@@ -45,7 +45,7 @@ const (
 
 	BTNODE_FIXED_KV_SIZE btreeNodeFlag = 0x0004
 	BTNODE_HASHED        btreeNodeFlag = 0x0008
-	BTNODE_NOHEADER      btreeNodeFlag = 0x0010
+	BTNODE_NOHEADER      btreeNodeFlag = 0x0010 // If this flag is set, the btn_o field of this instance of btree_node_phys_t is always zero.
 
 	BTNODE_CHECK_KOFF_INVAL btreeNodeFlag = 0x8000
 )
@@ -88,9 +88,9 @@ const BTREE_NODE_HASH_SIZE_MAX = 64
 
 // BTreeNodeIndexNodeValT is a btn_index_node_val_t
 type BTreeNodeIndexNodeValT struct {
-	ChildOid  OidT
-	ChildHash [32]byte //BTREE_NODE_HASH_SIZE_MAX=64 acc to spec, but in reality appears to be max size of hash type used! 32 seen // FIXME: what?
-	// ChildHash [BTREE_NODE_HASH_SIZE_MAX]byte
+	ChildOid OidT
+	// ChildHash [32]byte //BTREE_NODE_HASH_SIZE_MAX=64 acc to spec, but in reality appears to be max size of hash type used! 32 seen // FIXME: what?
+	ChildHash [BTREE_NODE_HASH_SIZE_MAX]byte
 }
 
 func (v BTreeNodeIndexNodeValT) String() string {
@@ -900,6 +900,7 @@ func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMa
 // GetFSRecordsForOid returns an array of all the file-system records with a given Virtual OID from a given file-system root tree.
 func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNodePhys, oid OidT, maxXid XidT) (FSRecords, error) {
 
+	var ok bool
 	var records FSRecords
 	var tocEntry NodeEntry
 
@@ -911,7 +912,10 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 	for i := uint16(0); i < treeHeight; i++ {
 		for idx, entry := range node.Entries {
 
-			tocEntry = entry.(NodeEntry)
+			tocEntry, ok = entry.(NodeEntry)
+			if !ok {
+				return nil, fmt.Errorf("failed to cast entry %d to NodeEntry", idx)
+			}
 			log.Debugf("%2d) %s", idx, tocEntry)
 
 			if node.IsLeaf() {
@@ -999,9 +1003,18 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 		}
 
 		// get child node
-		childNodeOmapEntry, err := n.GetOMapEntry(r, OidT(tocEntry.Val.(uint64)), maxXid)
+		fmt.Println(tocEntry)
+		o, ok := tocEntry.Val.(uint64)
+		if !ok {
+			oo, ok := tocEntry.Val.(BTreeNodeIndexNodeValT)
+			if !ok {
+				return nil, fmt.Errorf("failed to cast entry %s to 'uint64' OR 'BTreeNodeIndexNodeValT'", tocEntry.Val)
+			}
+			o = uint64(oo.ChildOid + oid)
+		}
+		childNodeOmapEntry, err := n.GetOMapEntry(r, OidT(o), maxXid)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get omap entry for oid %#x: %v", tocEntry.Val.(uint64), err)
+			return nil, fmt.Errorf("failed to get omap entry for %s: %v", tocEntry.Val, err)
 		}
 		nodeObj, err := ReadObj(r, childNodeOmapEntry.Val.Paddr)
 		if err != nil {

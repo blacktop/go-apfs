@@ -21,3 +21,4 @@ completions/
 apfs.*
 !apfs.go
 dyld_shared_cache*
+*.bin
