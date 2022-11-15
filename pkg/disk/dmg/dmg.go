@@ -19,7 +19,7 @@ import (
 	"github.com/fatih/color"
 
 	lzfse "github.com/blacktop/lzfse-cgo"
-	lru "github.com/hashicorp/golang-lru"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 )
