@@ -9,7 +9,6 @@ require (
 	github.com/c-bata/go-prompt v0.2.6
 	github.com/dustin/go-humanize v1.0.0
 	github.com/fatih/color v1.13.0
-	github.com/hashicorp/golang-lru v0.5.4
 	github.com/spf13/cobra v1.4.0
 	github.com/spf13/viper v1.12.0
 	github.com/vbauerster/mpb/v7 v7.4.2
