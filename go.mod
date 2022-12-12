@@ -5,7 +5,7 @@ go 1.18
 require (
 	github.com/apex/log v1.9.0
 	github.com/blacktop/go-plist v1.0.1
-	github.com/blacktop/lzfse-cgo v1.1.18
+	github.com/blacktop/lzfse-cgo v1.1.19
 	github.com/c-bata/go-prompt v0.2.6
 	github.com/dustin/go-humanize v1.0.0
 	github.com/fatih/color v1.13.0
