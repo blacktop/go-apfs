@@ -1,5 +1,5 @@
 /*
-Copyright © 2022 blacktop
+Copyright © 2020-2023 blacktop
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,33 +22,33 @@ THE SOFTWARE.
 package cmd
 
 import (
-	"path/filepath"
-	"os"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/apex/log"
 	"github.com/blacktop/go-apfs"
 	"github.com/blacktop/go-apfs/pkg/disk/dmg"
-	"github.com/spf13/cobra"
 	"github.com/c-bata/go-prompt"
+	"github.com/spf13/cobra"
 )
 
 type promptContext struct {
 	pwd string
-	a *apfs.APFS
+	a   *apfs.APFS
 }
 
 var pctx *promptContext
 
 func completer(d prompt.Document) []prompt.Suggest {
 	s := []prompt.Suggest{
-		{Text: "cat",  Description: "cat(1) file"},
-		{Text: "cd",   Description: "Change directory"},
-		{Text: "cp",   Description: "Copy file"},
+		{Text: "cat", Description: "cat(1) file"},
+		{Text: "cd", Description: "Change directory"},
+		{Text: "cp", Description: "Copy file"},
 		{Text: "exit", Description: "Quit prompt"},
-		{Text: "ls",   Description: "List files"},
-		{Text: "pwd",  Description: "Print working directory name"},
+		{Text: "ls", Description: "List files"},
+		{Text: "pwd", Description: "Print working directory name"},
 	}
 	return prompt.FilterHasPrefix(s, d.TextBeforeCursor(), true)
 }
@@ -75,7 +75,7 @@ func Executor(s string) {
 		}
 	}
 
-	switch (args[0]) {
+	switch args[0] {
 	case "cd":
 		if len(args) == 1 {
 			pctx.pwd = "/"
@@ -118,22 +118,22 @@ func Executor(s string) {
 
 		if len(args) >= 3 {
 			if err := pctx.a.Copy(path, args[2]); err != nil {
-				fmt.Fprintln(os.Stderr, "Error:" + err.Error())
+				fmt.Fprintln(os.Stderr, "Error:"+err.Error())
 				return
 			}
 		} else {
 			cwd, err := os.Getwd()
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "Error:" + err.Error())
+				fmt.Fprintln(os.Stderr, "Error:"+err.Error())
 				return
 			}
 			if err := pctx.a.Copy(path, cwd); err != nil {
-				fmt.Fprintln(os.Stderr, "Error:" + err.Error())
+				fmt.Fprintln(os.Stderr, "Error:"+err.Error())
 				return
 			}
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "command not found: " + args[0])
+		fmt.Fprintln(os.Stderr, "command not found: "+args[0])
 	}
 }
 
@@ -146,7 +146,7 @@ var promptCmd = &cobra.Command{
 	Use:   "prompt",
 	Short: "🚧 prompt to interactively run multiple commands",
 	Args:  cobra.MinimumNArgs(1),
-	RunE:  func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if Verbose {
 			log.SetLevel(log.DebugLevel)
 		}
@@ -166,7 +166,7 @@ var promptCmd = &cobra.Command{
 
 		pctx = &promptContext{
 			pwd: "/",
-			a: apfs,
+			a:   apfs,
 		}
 
 		p := prompt.New(Executor, completer, prompt.OptionLivePrefix(PromptPrefix))

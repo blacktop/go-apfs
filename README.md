@@ -108,4 +108,4 @@ Supports up to version **2020-06-22** of the **APFS** [specification](https://de
 
 ## License
 
-Apache 2.0 Copyright (c) 2022 **blacktop**
+Apache 2.0 Copyright (c) 2020-2023 **blacktop**
