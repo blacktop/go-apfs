@@ -8,7 +8,7 @@ require (
 	github.com/blacktop/lzfse-cgo v1.1.19
 	github.com/c-bata/go-prompt v0.2.6
 	github.com/dustin/go-humanize v1.0.1
-	github.com/fatih/color v1.13.0
+	github.com/fatih/color v1.14.0
 	github.com/hashicorp/golang-lru/v2 v2.0.1
 	github.com/spf13/cobra v1.6.1
 	github.com/spf13/viper v1.14.0
