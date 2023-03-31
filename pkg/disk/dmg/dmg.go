@@ -40,7 +40,7 @@ type DMG struct {
 	apfsPartitionSize   uint64
 	maxChunkSize        int
 
-	cache        *lru.Cache
+	cache        *lru.Cache[int, []byte]
 	evictCounter uint64
 
 	config Config
@@ -604,7 +604,7 @@ func (d *DMG) Load() error {
 					d.firstAPFSPartition = i
 					d.maxChunkSize = block.maxChunkSize()
 					// setup sector cache
-					d.cache, err = lru.NewWithEvict(int(block.BuffersNeeded), func(k interface{}, v interface{}) {
+					d.cache, err = lru.NewWithEvict(int(block.BuffersNeeded), func(k int, v []byte) {
 						log.Warn("evicted item from DMG read cache (maybe we should increase it)")
 						d.evictCounter++
 					})
@@ -681,7 +681,7 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 		if !d.config.DisableCache {
 			// check the cache
 			if val, found := d.cache.Get(entryIdx); found {
-				if _, err = out.Write(val.([]byte)); err != nil {
+				if _, err = out.Write(val); err != nil {
 					return n, fmt.Errorf("failed to write cached chunk data to writer")
 				}
 			} else {
