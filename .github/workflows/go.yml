@@ -69,21 +69,21 @@ jobs:
       -
         if: matrix.platform == 'ubuntu-latest'
         name: Upload assets (Linux)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: apfs_linux
           path: dist/*
       # -
       #   if: matrix.platform == 'macos-latest'
       #   name: Upload assets
-      #   uses: actions/upload-artifact@v3
+      #   uses: actions/upload-artifact@v4
       #   with:
       #     name: apfs_macos
       #     path: dist/*
       -
         if: matrix.platform == 'windows-latest'
         name: Upload assets (Windows)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: apfs_windows
           path: dist/*
