@@ -11,7 +11,7 @@ require (
 	github.com/fatih/color v1.16.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/spf13/cobra v1.8.0
-	github.com/spf13/viper v1.18.1
+	github.com/spf13/viper v1.18.2
 	github.com/vbauerster/mpb/v7 v7.5.3
 )
 
