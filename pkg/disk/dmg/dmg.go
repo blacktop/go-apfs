@@ -383,7 +383,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		log.Debugf(diskReadColor("Read %#x bytes of COMPRESS_ADC data", n))
 	case COMPRESS_ZLIB:
 		in = in[:chunk.CompressedLength]
-		if _, err = r.ReadAt(in, int64(chunk.DiskOffset)); err != nil {
+		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
 		zr, err := zlib.NewReader(bytes.NewReader(in))
