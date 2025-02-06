@@ -356,6 +356,44 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 	return nil
 }
 
+var _ io.ReaderAt = (*UDIFBlockData)(nil)
+
+func (b *UDIFBlockData) ReadAt(p []byte, off int64) (n int, err error) {
+	for _, chk := range b.Chunks {
+		lenP := int64(len(p))
+		if lenP == 0 {
+			break
+		}
+
+		diff := off - int64(chk.DiskOffset)
+		if diff >= int64(chk.DiskLength) {
+			continue
+		}
+
+		var buf bytes.Buffer
+		if _, err = chk.DecompressChunk(b.sr, make([]byte, chk.CompressedLength), &buf); err != nil {
+			return n, err
+		}
+		data := buf.Bytes()
+
+		size := int64(len(data)) - diff
+		if lenP < size {
+			size = lenP
+		}
+
+		n += copy(p, data[diff:diff+size])
+
+		p = p[size:]
+		off += size
+	}
+
+	if len(p) > 0 {
+		err = io.ErrUnexpectedEOF
+	}
+
+	return n, err
+}
+
 // DecompressChunk decompresses a given chunk and writes it to supplied bufio.Writer
 func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out *bytes.Buffer) (n int, err error) {
 	var nn int64
