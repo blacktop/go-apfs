@@ -16,7 +16,7 @@ build-deps: ## Install the build dependencies
 .PHONY: build
 build: ## Build apfs locally
 	@echo " > Building locally"
-	CGO_ENABLED=1 go build -o apfs.${CUR_VERSION} ./cmd/apfs
+	@cd cmd/apfs; go build -o ../../apfs.${CUR_VERSION} main.go
 
 .PHONY: test
 test: build ## Test apfs (list root dir on APFS_DMG)
