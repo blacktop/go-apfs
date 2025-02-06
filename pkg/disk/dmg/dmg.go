@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/apex/log"
 	"github.com/blacktop/go-apfs/pkg/adc"
@@ -24,7 +25,10 @@ import (
 	"github.com/vbauerster/mpb/v7/decor"
 )
 
-const sectorSize = 0x200
+const (
+	sectorSize = 0x200
+	blockSize  = 0xc8000
+)
 
 var diskReadColor = color.New(color.Faint, color.FgWhite).SprintfFunc()
 
@@ -368,10 +372,10 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		n = int(nn)
 		log.Debugf(diskReadColor("Read %#x bytes of UNCOMPRESSED data", n))
 	case IGNORED:
-		if n, err = out.Write(make([]byte, chunk.DiskLength*udifSectorSize)); err != nil {
-			return -1, fmt.Errorf("failed to write IGNORED data")
-		}
-		log.Debugf(diskReadColor("Read %#x bytes of IGNORED outa", n))
+		// if n, err = out.Write(make([]byte, chunk.DiskLength*udifSectorSize)); err != nil {
+		// 	return -1, fmt.Errorf("failed to write IGNORED data")
+		// }
+		// log.Debugf(diskReadColor("Read %#x bytes of IGNORED outa", n))
 	case COMPRESS_ADC:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -383,7 +387,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		log.Debugf(diskReadColor("Read %#x bytes of COMPRESS_ADC data", n))
 	case COMPRESS_ZLIB:
 		in = in[:chunk.CompressedLength]
-		if _, err = r.ReadAt(in, int64(chunk.DiskOffset)); err != nil {
+		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
 		zr, err := zlib.NewReader(bytes.NewReader(in))
@@ -543,7 +547,7 @@ func (d *DMG) GetSize() uint64 {
 // GetBlock returns the size of the DMG data
 func (d *DMG) GetBlock(name string) (*UDIFBlockData, error) {
 	for _, block := range d.Blocks {
-		if strings.EqualFold(block.Name, name) {
+		if strings.Contains(block.Name, name) {
 			return &block, nil
 		}
 	}
@@ -554,7 +558,7 @@ func (d *DMG) GetBlock(name string) (*UDIFBlockData, error) {
 func (d *DMG) Load() error {
 
 	var out bytes.Buffer
-	dat := make([]byte, 0, types.BLOCK_SIZE)
+	dat := make([]byte, 0, blockSize)
 
 	block, err := d.GetBlock("Primary GPT Header")
 	if err != nil {
@@ -597,7 +601,11 @@ func (d *DMG) Load() error {
 	// find first APFS partition
 	found := false
 	for _, part := range g.Partitions {
-		if part.Type.String() == gpt.Apple_APFS {
+		switch part.Type.String() {
+		case gpt.None:
+		case gpt.HFSPlus:
+			fallthrough
+		case gpt.Apple_APFS:
 			for i, block := range d.Blocks {
 				if block.udifBlockData.StartSector == part.StartingLBA {
 					found = true
@@ -616,10 +624,29 @@ func (d *DMG) Load() error {
 			// Get partition offset and size
 			d.apfsPartitionOffset = part.StartingLBA * sectorSize
 			d.apfsPartitionSize = (part.EndingLBA - part.StartingLBA + 1) * sectorSize
+		default:
+			parts := make([]uint16, len(part.PartitionNameUTF16)/binary.Size(uint16(0)))
+			if err := binary.Read(bytes.NewReader(part.PartitionNameUTF16[:]), binary.LittleEndian, &parts); err != nil {
+				return fmt.Errorf("failed to read partition name: %w", err)
+			}
+			log.Debugf("skipping partition: %s", string(utf16.Decode(parts)))
 		}
 	}
 	if !found {
 		return fmt.Errorf("failed to find Apple_APFS partition in DMG")
+	}
+
+	out.Reset()
+
+	block, err = d.GetBlock("disk image")
+	if err != nil {
+		return fmt.Errorf("failed to get disk image block: %w", err)
+	}
+	for i, chunk := range block.Chunks {
+		if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
+			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
+		}
+		os.WriteFile("disk.img", out.Bytes(), 0644)
 	}
 
 	return nil

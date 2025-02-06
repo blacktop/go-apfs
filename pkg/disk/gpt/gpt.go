@@ -25,6 +25,7 @@ const (
 	Apple_Label        = "4C616265-6C00-11AA-AA11-00306543ECAC"
 	AppleTV_Recovery   = "5265636F-7665-11AA-AA11-00306543ECAC"
 	HFSPlus_FileVault  = "53746F72-6167-11AA-AA11-00306543ECAC"
+	None               = "00000000-0000-0000-0000-000000000000"
 )
 
 var appleApfsGUID = [...]byte{0xEF, 0x57, 0x34, 0x7C, 0x00, 0x00, 0xAA, 0x11, 0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC}
