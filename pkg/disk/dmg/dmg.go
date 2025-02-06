@@ -474,7 +474,12 @@ func Open(name string, c *Config) (*DMG, error) {
 	if err != nil {
 		return nil, err
 	}
-	ff, err := NewDMG(f)
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	ff, err := NewDMG(io.NewSectionReader(f, 0, fi.Size()))
 	if err != nil {
 		f.Close()
 		return nil, err
@@ -491,16 +496,16 @@ func Open(name string, c *Config) (*DMG, error) {
 
 // NewDMG creates a new DMG for accessing a dmg in an underlying reader.
 // The dmg is expected to start at position 0 in the ReaderAt.
-func NewDMG(r *os.File) (*DMG, error) {
+func NewDMG(sr *io.SectionReader) (*DMG, error) {
 
 	d := new(DMG)
-	d.sr = io.NewSectionReader(r, 0, 1<<63-1)
+	d.sr = sr
 
-	if _, err := r.Seek(int64(-binary.Size(UDIFResourceFile{})), io.SeekEnd); err != nil {
+	if _, err := d.sr.Seek(int64(-binary.Size(UDIFResourceFile{})), io.SeekEnd); err != nil {
 		return nil, fmt.Errorf("failed to seek to DMG footer: %v", err)
 	}
 
-	if err := binary.Read(r, binary.BigEndian, &d.Footer); err != nil {
+	if err := binary.Read(d.sr, binary.BigEndian, &d.Footer); err != nil {
 		return nil, fmt.Errorf("failed to read DMG footer: %v", err)
 	}
 
@@ -510,10 +515,10 @@ func NewDMG(r *os.File) (*DMG, error) {
 
 	// TODO: parse Code Signnature
 
-	r.Seek(int64(d.Footer.PlistOffset), io.SeekStart)
+	d.sr.Seek(int64(d.Footer.PlistOffset), io.SeekStart)
 
 	pdata := make([]byte, d.Footer.PlistLength)
-	if err := binary.Read(r, binary.BigEndian, &pdata); err != nil {
+	if err := binary.Read(d.sr, binary.BigEndian, &pdata); err != nil {
 		return nil, fmt.Errorf("failed to read DMG plist data: %v", err)
 	}
 
