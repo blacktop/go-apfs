@@ -41,7 +41,7 @@ var (
 	// AppVersion stores the plugin's version
 	AppVersion string
 	// AppBuildTime stores the plugin's build time
-	AppBuildTime string
+	AppBuildCommit string
 )
 
 // rootCmd represents the base command when called without any subcommands

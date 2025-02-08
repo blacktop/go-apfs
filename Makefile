@@ -29,7 +29,7 @@ test: build ## Test apfs (list root dir on APFS_DMG)
 .PHONY: dry_release
 dry_release: ## Run goreleaser without releasing/pushing artifacts to github
 	@echo " > Creating Pre-release Build ${NEXT_VERSION}"
-	@GOROOT=$(shell go env GOROOT) goreleaser build --id darwin --clean --timeout 60m --snapshot --single-target --output dist/apfs
+	@GOROOT=$(shell go env GOROOT) goreleaser build --id darwin --clean --timeout 60m --snapshot --single-target
 
 .PHONY: snapshot
 snapshot: ## Run goreleaser snapshot

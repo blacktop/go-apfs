@@ -21,7 +21,7 @@ metadata:
 
 builds:
   - id: darwin
-    main: ./cmd/apfs
+    dir: cmd/apfs
     binary: apfs
     env:
       - CGO_ENABLED=1

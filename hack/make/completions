@@ -1,7 +1,8 @@
 #!/bin/sh
 set -e
-rm -rf completions
-mkdir completions
+rm -rf ../../completions
+mkdir ../../completions
+cd cmd/apfs
 for sh in bash zsh fish powershell; do
-	go run ./cmd/apfs/main.go completion "$sh" > "completions/_$sh"
+	go run main.go completion "$sh" > "../../completions/_$sh"
 done
