@@ -40,7 +40,7 @@ snapshot: ## Run goreleaser snapshot
 release: ## Create a new release from the NEXT_VERSION
 	@echo " > Creating Release ${NEXT_VERSION}"
 	@hack/make/release ${NEXT_VERSION}
-	@goreleaser --rm-dist
+	@GOROOT=$(shell go env GOROOT) goreleaser --clean --timeout 60m --skip=validate
 
 .PHONY: destroy
 destroy: ## Remove release for the CUR_VERSION
