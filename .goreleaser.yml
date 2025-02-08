@@ -1,10 +1,24 @@
-# This is an example .goreleaser.yml file with some sane defaults.
-# Make sure to check the documentation at https://goreleaser.com
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=jcroql
+version: 2
+
 before:
   hooks:
     - go mod tidy
     - go generate ./...
     - ./.hack/make/completions
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# gomod:
+#   proxy: true
+
+report_sizes: true
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
+
 builds:
   - id: darwin
     main: ./cmd/apfs
@@ -24,14 +38,21 @@ universal_binaries:
     replace: true
     name_template: "apfs"
 archives:
-  - replacements:
-      darwin: macOS
-      amd64: x86_64
-      all: universal
-    name_template: "apfs_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macOS
+      {{- else if eq .Os "ios" }}iOS
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "all" }}universal
+      {{- else }}{{ .Arch }}{{ end }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats: zip
+    builds_info:
+      group: root
+      owner: root
     files:
       - README.md
       - LICENSE
@@ -41,14 +62,12 @@ checksum:
   disable: false
 signs:
   - artifacts: checksum
-snapshot:
-  name_template: "{{ incpatch .Version }}-next"
 brews:
   - name: apfs
-    tap:
+    repository:
       owner: blacktop
       name: homebrew-tap
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/blacktop/go-apfs"
     description: "APFS parser written in pure Go"
     install: |
@@ -62,35 +81,38 @@ changelog:
   sort: asc
   use: github
   groups:
-    - title: "New Features and updates"
-      regexp: "^.*feat[(\\w)]*:+.*$"
-      order: 0
+    - title: Dependency updates
+      regexp: '^.*?(.+)\(deps\)!?:.+$'
+      order: 300
+    - title: "New Features"
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 100
+    - title: "Security updates"
+      regexp: '^.*?sec(\(.+\))??!?:.+$'
+      order: 150
     - title: "Bug fixes"
-      regexp: "^.*fix[(\\w)]*:+.*$"
-      order: 10
-    - title: 'Documentation updates'
-      regexp: "^.*docs[(\\w)]*:+.*$"
-      order: 20
+      regexp: '^.*?(fix|refactor)(\(.+\))??!?:.+$'
+      order: 200
+    - title: "Documentation updates"
+      regexp: ^.*?docs?(\(.+\))??!?:.+$
+      order: 400
+    - title: "Build process updates"
+      regexp: ^.*?(build|ci)(\(.+\))??!?:.+$
+      order: 400
     - title: Other work
-      order: 999
+      order: 9999
   filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - '^chore:'
-      - "^bumping"
-      - "^Update"
-      - "^Delete"
-      - "^Working"
-      - "reorg"
-      - "updates"
-      - 'merge conflict'
-      - Merge pull request
-      - Merge remote-tracking branch
-      - Merge branch
+    include:
+      - "^feat.*"
+      - "^fix.*"
+      - "^chore.*"
+      - "^sec.*"
+      - "^(doc|docs).*"
 release:
   footer: |
     ### Summary
     **Full Changelog**: https://github.com/blacktop/go-apfs/compare/{{ .PreviousTag }}...{{ .Tag }}
     ## What to do next?
+    - Read the [documentation](https://blacktop.github.io/ipsw)
     - Follow us on [Twitter](https://twitter.com/blacktop__)
+    - Follow us on [Mastodon](https://mastodon.social/@blacktop)
