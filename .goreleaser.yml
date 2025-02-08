@@ -6,7 +6,7 @@ before:
   hooks:
     - go mod tidy
     - go generate ./...
-    - ./.hack/make/completions
+    - ./hack/make/completions
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
@@ -33,6 +33,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
+    ldflags: -s -w -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppVersion={{.Version}} -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppBuildCommit={{.Commit}}
 universal_binaries:
   - id: darwin
     replace: true
