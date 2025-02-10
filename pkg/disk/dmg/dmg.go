@@ -244,12 +244,7 @@ func (b *Partition) maxChunkSize() int {
 	return max
 }
 
-// DecompressChunks decompresses the chunks for a given block and writes them to supplied bufio.Writer
-func (b *Partition) DecompressChunks(w *bufio.Writer) error {
-	var n int
-	var total int
-	var err error
-
+func (b *Partition) WriteWithProgress(w *bufio.Writer) error {
 	log.Infof("Decompressing DMG block %s", b.Name)
 
 	// initialize progress bar
@@ -267,6 +262,15 @@ func (b *Partition) DecompressChunks(w *bufio.Writer) error {
 		),
 		mpb.AppendDecorators(decor.Percentage()),
 	)
+
+	return b.Write(w, bar)
+}
+
+// Write decompresses the chunks for a given block and writes them to supplied bufio.Writer
+func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
+	var n int
+	var total int
+	var err error
 
 	buff := make([]byte, 0, b.maxChunkSize())
 
@@ -357,10 +361,14 @@ func (b *Partition) DecompressChunks(w *bufio.Writer) error {
 		default:
 			return fmt.Errorf("chunk has unsupported compression type: %#x", chunk.Type)
 		}
-		bar.Increment()
+		if len(bar) > 0 {
+			bar[0].Increment()
+		}
 	}
 	// wait for progress bar to complete and flush
-	p.Wait()
+	if len(bar) > 0 {
+		bar[0].Wait()
+	}
 
 	return nil
 }
@@ -381,6 +389,25 @@ func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
 
 		var buf bytes.Buffer
 		if _, err = chk.DecompressChunk(b.sr, make([]byte, chk.CompressedLength), &buf); err != nil {
+			return n, err
+		}
+		data := buf.Bytes()
+
+		size := int64(len(data)) - diff
+		if lenP < size {
+			size = lenP
+		}
+
+		n += copy(p, data[diff:diff+size])
+
+		p = p[size:]
+		off += size
+	}
+
+	if len(p) > 0 {
+		err = io.ErrUnexpectedEOF
+	}
+
 	return n, err
 }
 
