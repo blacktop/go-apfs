@@ -222,14 +222,15 @@ type VolumeHeader struct {
 
 func (hdr *VolumeHeader) String() string {
 	return fmt.Sprintf(
-		"Signature:          %s\n"+
-			"Version:            %d\n"+
-			"Attributes:         %s\n"+
-			"LastMountedVersion: %s\n"+
-			"CreateDate:         %s\n"+
-			"ModifyDate:         %s\n"+
-			"BackupDate:         %s\n"+
-			"CheckedDate:        %s\n",
+		"Volume Header:\n"+
+			"    Signature:           %s\n"+
+			"    Version:             %d\n"+
+			"    Attributes:          %s\n"+
+			"    LastMountedVersion:  %s\n"+
+			"    CreateDate:          %s\n"+
+			"    ModifyDate:          %s\n"+
+			"    BackupDate:          %s\n"+
+			"    CheckedDate:         %s\n",
 		hdr.Signature,
 		hdr.Version,
 		hdr.Attributes.String(),
