@@ -153,7 +153,7 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 		return nil, fmt.Errorf("failed to read node descriptor: %v", err)
 	}
 	if node.Descriptor.Kind == BTHeaderNodeKind {
-		// Header nodes do not contain records.
+		// header nodes do not contain records.
 		return &node, nil
 	}
 	// The record offset array is stored at the end of the node.
@@ -217,4 +217,14 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 		node.Records[i] = record
 	}
 	return &node, nil
+}
+
+func (root *BTNode) Files(folderID uint32) ([]*FileRecord, error) {
+	var files []*FileRecord
+	// for _, record := range root.Records {
+	// 	if record.Type() == HFSPlusFileRecord {
+	// 		files = append(files, record.(*FileRecord))
+	// 	}
+	// }
+	return files, nil
 }
