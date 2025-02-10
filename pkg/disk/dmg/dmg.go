@@ -32,12 +32,17 @@ const (
 
 var diskReadColor = color.New(color.Faint, color.FgWhite).SprintfFunc()
 
+// Config is the DMG config
+type Config struct {
+	DisableCache bool
+}
+
 // DMG apple disk image object
 type DMG struct {
-	Footer UDIFResourceFile
-	Plist  resourceFork
-	Nsiz   nsiz
-	Blocks []UDIFBlockData
+	Footer     UDIFResourceFile
+	Plist      resourceFork
+	Nsiz       nsiz
+	Partitions []Partition
 
 	firstAPFSPartition  int
 	apfsPartitionOffset uint64
@@ -51,11 +56,6 @@ type DMG struct {
 
 	sr     *io.SectionReader
 	closer io.Closer
-}
-
-// Config is the DMG config
-type Config struct {
-	DisableCache bool
 }
 
 type block struct {
@@ -117,7 +117,7 @@ const (
 	InternetEnabled udifResourceFileFlag = 0x00000004
 )
 
-// UDIFResourceFile - Universal Disk Image Format (UDIF)
+// UDIFResourceFile - Universal Disk Image Format (UDIF) DMG Footer
 type UDIFResourceFile struct {
 	Signature             udifSignature // magic 'koly'
 	Version               uint32        // 4 (as of 2013)
@@ -159,32 +159,25 @@ const (
 	udifBDVersion   = 1
 )
 
+// UDIFBlockData object (a partition)
 type udifBlockData struct {
-	Signature   udifSignature // magic 'mish'
-	Version     uint32
-	StartSector uint64 // Logical block offset and length, in sectors.
-	SectorCount uint64
-
+	Signature        udifSignature // magic 'mish'
+	Version          uint32
+	StartSector      uint64 // Logical block offset and length, in sectors.
+	SectorCount      uint64
 	DataOffset       uint64
 	BuffersNeeded    uint32
 	BlockDescriptors uint32
-
-	Reserved1 uint32
-	Reserved2 uint32
-	Reserved3 uint32
-	Reserved4 uint32
-	Reserved5 uint32
-	Reserved6 uint32
-
-	Checksum UDIFChecksum
-
-	ChunkCount uint32
+	Reserved         [6]uint32
+	Checksum         UDIFChecksum
+	ChunkCount       uint32
 }
 
-// UDIFBlockData object
-type UDIFBlockData struct {
-	Name string
+// Partition object
+type Partition struct {
 	udifBlockData
+
+	Name   string
 	Chunks []udifBlockChunk
 
 	sr *io.SectionReader
@@ -205,16 +198,43 @@ const (
 	LAST_BLOCK      udifBlockChunkType = 0xffffffff
 )
 
+func (t udifBlockChunkType) String() string {
+	switch t {
+	case ZERO_FILL:
+		return "ZERO_FILL"
+	case UNCOMPRESSED:
+		return "UNCOMPRESSED"
+	case IGNORED:
+		return "IGNORED"
+	case COMPRESS_ADC:
+		return "COMPRESS_ADC"
+	case COMPRESS_ZLIB:
+		return "COMPRESS_ZLIB"
+	case COMPRESSS_BZ2:
+		return "COMPRESSS_BZ2"
+	case COMPRESSS_LZFSE:
+		return "COMPRESSS_LZFSE"
+	case COMPRESSS_LZMA:
+		return "COMPRESSS_LZMA"
+	case COMMENT:
+		return "COMMENT"
+	case LAST_BLOCK:
+		return "LAST_BLOCK"
+	default:
+		return fmt.Sprintf("UNKNOWN (%#x)", t)
+	}
+}
+
 type udifBlockChunk struct {
 	Type             udifBlockChunkType
 	Comment          uint32
-	DiskOffset       uint64 // Logical chunk offset and length, in sectors.
-	DiskLength       uint64
+	DiskOffset       uint64 // Logical chunk offset and length, in sectors. (sector number)
+	DiskLength       uint64 // (sector count)
 	CompressedOffset uint64 // Compressed offset and length, in bytes.
 	CompressedLength uint64
 }
 
-func (b *UDIFBlockData) maxChunkSize() int {
+func (b *Partition) maxChunkSize() int {
 	var max int
 	for _, chunk := range b.Chunks {
 		if max < int(chunk.CompressedLength) {
@@ -225,7 +245,7 @@ func (b *UDIFBlockData) maxChunkSize() int {
 }
 
 // DecompressChunks decompresses the chunks for a given block and writes them to supplied bufio.Writer
-func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
+func (b *Partition) DecompressChunks(w *bufio.Writer) error {
 	var n int
 	var total int
 	var err error
@@ -250,54 +270,46 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 
 	buff := make([]byte, 0, b.maxChunkSize())
 
-	// for _, chunk := range b.Chunks[:50] {
-	for _, chunk := range b.Chunks {
+	for idx, chunk := range b.Chunks {
 		// TODO: verify chunk (size not greater than block etc)
 		switch chunk.Type {
-		case ZERO_FILL:
-
-			n, err = w.Write(make([]byte, chunk.CompressedLength))
+		case ZERO_FILL, IGNORED, COMMENT:
+			n, err = w.Write(make([]byte, chunk.DiskLength))
 			if err != nil {
 				return err
 			}
 			total += n
-			log.Debugf(diskReadColor("Wrote %#x bytes of ZERO_FILL data (output size: %#x)", n, total))
+			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		case UNCOMPRESSED:
 			buff = buff[:chunk.CompressedLength]
+			pos, _ := b.sr.Seek(0, io.SeekCurrent)
+			pos += int64(chunk.CompressedOffset)
 			_, err = b.sr.ReadAt(buff, int64(chunk.CompressedOffset))
 			if err != nil {
 				return err
 			}
-
 			n, err = w.Write(buff)
 			if err != nil {
 				return err
 			}
 			total += n
-			log.Debugf(diskReadColor("Wrote %#x bytes of UNCOMPRESSED data (output size: %#x)", n, total))
-		case IGNORED:
-
-			n, err = w.Write(make([]byte, chunk.DiskLength*udifSectorSize))
-			if err != nil {
-				return err
-			}
-			total += n
-			log.Debugf(diskReadColor("Wrote %#x bytes of IGNORED data (output size: %#x)", n, total))
+			log.Debugf(diskReadColor("%d) From %#x Wrote %#x bytes of %s data (output size: %#x)", idx, pos, n, chunk.Type, total))
 		case COMPRESS_ADC:
 			buff = buff[:chunk.CompressedLength]
 			_, err = b.sr.ReadAt(buff, int64(chunk.CompressedOffset))
 			if err != nil {
 				return err
 			}
-
 			n, err = w.Write(adc.DecompressADC(buff))
 			if err != nil {
 				return err
 			}
 			total += n
-			log.Debugf(diskReadColor("Wrote %#x bytes of COMPRESS_ADC data (output size: %#x)", n, total))
+			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		case COMPRESS_ZLIB:
 			buff = buff[:chunk.CompressedLength]
+			pos, _ := b.sr.Seek(0, io.SeekCurrent)
+			pos += int64(chunk.CompressedOffset)
 			_, err = b.sr.ReadAt(buff, int64(chunk.CompressedOffset))
 			if err != nil {
 				return err
@@ -306,26 +318,24 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 			if err != nil {
 				return err
 			}
-
 			n, err := w.ReadFrom(r)
 			if err != nil {
 				return err
 			}
 			r.Close()
 			total += int(n)
-			log.Debugf(diskReadColor("Wrote %#x bytes of COMPRESS_ZLIB data (output size: %#x)", n, total))
+			log.Debugf(diskReadColor("%d) From %#x -> Wrote %#x bytes of %s data (output size: %#x)", idx, pos, n, chunk.Type, total))
 		case COMPRESSS_BZ2:
 			buff = buff[:chunk.CompressedLength]
 			if _, err := b.sr.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
 				return err
 			}
-
 			n, err := w.ReadFrom(bzip2.NewReader(bytes.NewReader(buff)))
 			if err != nil {
 				return err
 			}
 			total += int(n)
-			log.Debugf(diskReadColor("Wrote %#x bytes of COMPRESSS_BZ2 data (output size: %#x)", n, total))
+			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		case COMPRESSS_LZFSE:
 			buff = buff[:chunk.CompressedLength]
 			if _, err := b.sr.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
@@ -336,29 +346,28 @@ func (b *UDIFBlockData) DecompressChunks(w *bufio.Writer) error {
 				return err
 			}
 			total += n
-			log.Debugf(diskReadColor("Wrote %#x bytes of COMPRESSS_LZFSE data (output size: %#x)", n, total))
+			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		case COMPRESSS_LZMA:
-			return fmt.Errorf("COMPRESSS_LZMA is currently unsupported")
-		case COMMENT:
-			continue // TODO: how to parse comments?
+			return fmt.Errorf("%s is currently unsupported", chunk.Type)
 		case LAST_BLOCK:
 			if err := w.Flush(); err != nil {
 				return err
 			}
+			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		default:
-			return fmt.Errorf("chuck has unsupported compression type: %#x", chunk.Type)
+			return fmt.Errorf("chunk has unsupported compression type: %#x", chunk.Type)
 		}
 		bar.Increment()
 	}
-	// wait for our bar to complete and flush
+	// wait for progress bar to complete and flush
 	p.Wait()
 
 	return nil
 }
 
-var _ io.ReaderAt = (*UDIFBlockData)(nil)
+var _ io.ReaderAt = (*Partition)(nil)
 
-func (b *UDIFBlockData) ReadAt(p []byte, off int64) (n int, err error) {
+func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
 	for _, chk := range b.Chunks {
 		lenP := int64(len(p))
 		if lenP == 0 {
@@ -372,24 +381,12 @@ func (b *UDIFBlockData) ReadAt(p []byte, off int64) (n int, err error) {
 
 		var buf bytes.Buffer
 		if _, err = chk.DecompressChunk(b.sr, make([]byte, chk.CompressedLength), &buf); err != nil {
-			return n, err
-		}
-		data := buf.Bytes()
+	return n, err
+}
 
-		size := int64(len(data)) - diff
-		if lenP < size {
-			size = lenP
-		}
+var _ io.Reader = (*Partition)(nil)
 
-		n += copy(p, data[diff:diff+size])
-
-		p = p[size:]
-		off += size
-	}
-
-	if len(p) > 0 {
-		err = io.ErrUnexpectedEOF
-	}
+func (b *Partition) Read(p []byte) (n int, err error) {
 
 	return n, err
 }
@@ -398,22 +395,22 @@ func (b *UDIFBlockData) ReadAt(p []byte, off int64) (n int, err error) {
 func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out *bytes.Buffer) (n int, err error) {
 	var nn int64
 	switch chunk.Type {
-	case ZERO_FILL:
-		if n, err = out.Write(make([]byte, chunk.CompressedLength)); err != nil {
+	case ZERO_FILL, IGNORED, COMMENT:
+		if n, err = out.Write(make([]byte, chunk.DiskLength)); err != nil {
 			return -1, fmt.Errorf("failed to write ZERO_FILL data")
 		}
-		log.Debugf(diskReadColor("Read %#x bytes of ZERO_FILL out", n))
+		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case UNCOMPRESSED:
-		if nn, err = out.ReadFrom(io.NewSectionReader(r, int64(chunk.CompressedOffset), int64(chunk.CompressedLength))); err != nil {
-			return -1, fmt.Errorf("failed to write UNCOMPRESSED data")
+		in = in[:chunk.CompressedLength]
+		_, err = r.ReadAt(in, int64(chunk.CompressedOffset))
+		if err != nil {
+			return -1, fmt.Errorf("failed to read %s data", chunk.Type)
 		}
-		n = int(nn)
-		log.Debugf(diskReadColor("Read %#x bytes of UNCOMPRESSED data", n))
-	case IGNORED:
-		// if n, err = out.Write(make([]byte, chunk.DiskLength*udifSectorSize)); err != nil {
-		// 	return -1, fmt.Errorf("failed to write IGNORED data")
-		// }
-		// log.Debugf(diskReadColor("Read %#x bytes of IGNORED outa", n))
+		n, err = out.Write(in)
+		if err != nil {
+			return -1, fmt.Errorf("failed to write %s data", chunk.Type)
+		}
+		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESS_ADC:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -422,7 +419,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if n, err = out.Write(adc.DecompressADC(in)); err != nil {
 			return -1, fmt.Errorf("failed to write COMPRESS_ADC data")
 		}
-		log.Debugf(diskReadColor("Read %#x bytes of COMPRESS_ADC data", n))
+		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESS_ZLIB:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -432,12 +429,11 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if err != nil {
 			return -1, fmt.Errorf("failed to create zlib reader")
 		}
-		defer zr.Close()
 		if nn, err = out.ReadFrom(zr); err != nil {
 			return -1, fmt.Errorf("failed to write COMPRESS_ZLIB data")
 		}
 		n = int(nn)
-		log.Debugf(diskReadColor("Read %#x bytes of COMPRESS_ZLIB data", n))
+		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESSS_BZ2:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -447,7 +443,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 			return -1, fmt.Errorf("failed to write COMPRESSS_BZ2 data")
 		}
 		n = int(nn)
-		log.Debugf(diskReadColor("Read %#x bytes of COMPRESSS_BZ2 data", n))
+		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESSS_LZFSE:
 		in = in[:chunk.CompressedLength]
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
@@ -456,10 +452,9 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if n, err = out.Write(lzfse.DecodeBuffer(in)); err != nil {
 			return -1, fmt.Errorf("failed to write COMPRESSS_LZFSE data")
 		}
-		log.Debugf(diskReadColor("Read %#x bytes of COMPRESSS_LZFSE data", n))
+		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESSS_LZMA:
 		return n, fmt.Errorf("COMPRESSS_LZMA is currently unsupported")
-	case COMMENT: // TODO: how to parse comments?
 	case LAST_BLOCK:
 	default:
 		return n, fmt.Errorf("chuck has unsupported compression type: %#x", chunk.Type)
@@ -515,56 +510,83 @@ func NewDMG(sr *io.SectionReader) (*DMG, error) {
 
 	// TODO: parse Code Signnature
 
-	d.sr.Seek(int64(d.Footer.PlistOffset), io.SeekStart)
-
-	pdata := make([]byte, d.Footer.PlistLength)
-	if err := binary.Read(d.sr, binary.BigEndian, &pdata); err != nil {
-		return nil, fmt.Errorf("failed to read DMG plist data: %v", err)
-	}
-
-	pl := plist.NewDecoder(bytes.NewReader(pdata))
-	if err := pl.Decode(&d.Plist); err != nil {
-		return nil, fmt.Errorf("failed to parse DMG plist data: %v\n%s", err, string(pdata[:]))
+	// parse 'plist' data if it exists
+	if d.Footer.PlistOffset > 0 && d.Footer.PlistLength > 0 {
+		d.sr.Seek(int64(d.Footer.PlistOffset), io.SeekStart)
+		pdata := make([]byte, d.Footer.PlistLength)
+		if err := binary.Read(d.sr, binary.BigEndian, &pdata); err != nil {
+			return nil, fmt.Errorf("failed to read DMG plist data: %v", err)
+		}
+		if err := plist.NewDecoder(bytes.NewReader(pdata)).Decode(&d.Plist); err != nil {
+			return nil, fmt.Errorf("failed to parse DMG plist data: %v\n%s", err, string(pdata[:]))
+		}
+	} else if d.Footer.RsrcForkOffset > 0 && d.Footer.RsrcForkLength > 0 {
+		log.Fatal("Resource fork parsing is not yet implemented.")
 	}
 
 	if nsiz, ok := d.Plist.ResourceFork["nsiz"]; ok {
-		pl = plist.NewDecoder(bytes.NewReader(nsiz[0].Data))
-		if err := pl.Decode(&d.Nsiz); err != nil {
+		if err := plist.NewDecoder(bytes.NewReader(nsiz[0].Data)).Decode(&d.Nsiz); err != nil {
 			return nil, fmt.Errorf("failed to parse nsiz plist data: %v\n%s", err, string(nsiz[0].Data[:]))
 		}
 	}
 
-	// TODO: handle 'cSum', 'plst' and 'size' also
-	for _, block := range d.Plist.ResourceFork["blkx"] {
-		var bdata UDIFBlockData
+	d.sr.Seek(0, io.SeekStart)
 
-		r := bytes.NewReader(block.Data)
+	if blkx, ok := d.Plist.ResourceFork["blkx"]; ok {
+		for _, block := range blkx {
+			log.Debugf("'blkx' data for block: '%s'", block.Name)
+			r := bytes.NewReader(block.Data)
 
-		bdata.Name = block.Name
-		bdata.sr = d.sr
+			bdata := Partition{
+				Name: block.Name,
+			}
 
-		if err := binary.Read(r, binary.BigEndian, &bdata.udifBlockData); err != nil {
-			return nil, fmt.Errorf("failed to read UDIFBlockData in block %s: %v", block.Name, err)
+			if err := binary.Read(r, binary.BigEndian, &bdata.udifBlockData); err != nil {
+				return nil, fmt.Errorf("failed to read UDIFBlockData in block %s: %v", block.Name, err)
+			}
+
+			if bdata.udifBlockData.Signature.String() != udifBDSignature {
+				return nil, fmt.Errorf("found unexpected UDIFBlockData signure: %s, expected: %s", bdata.udifBlockData.Signature.String(), udifBDSignature)
+			}
+
+			for range int(bdata.udifBlockData.ChunkCount) {
+				var chunk udifBlockChunk
+				binary.Read(r, binary.BigEndian, &chunk)
+				bdata.Chunks = append(bdata.Chunks, udifBlockChunk{
+					Type:             chunk.Type,
+					Comment:          chunk.Comment,
+					DiskOffset:       (chunk.DiskOffset + bdata.StartSector) * sectorSize,
+					DiskLength:       chunk.DiskLength * sectorSize,
+					CompressedOffset: chunk.CompressedOffset + bdata.DataOffset,
+					CompressedLength: chunk.CompressedLength,
+				})
+			}
+
+			bdata.sr = io.NewSectionReader(d.sr, int64(d.Footer.DataForkOffset+bdata.DataOffset), int64(bdata.SectorCount)*sectorSize)
+
+			d.Partitions = append(d.Partitions, bdata)
 		}
+	}
 
-		if bdata.udifBlockData.Signature.String() != udifBDSignature {
-			return nil, fmt.Errorf("found unexpected UDIFBlockData signure: %s, expected: %s", bdata.udifBlockData.Signature.String(), udifBDSignature)
+	if plstBlocks, ok := d.Plist.ResourceFork["plst"]; ok {
+		// TODO: parse plst data (find sample data)
+		for _, plst := range plstBlocks {
+			log.Debugf("'plst' data for block: '%s'", plst.Name)
 		}
+	}
 
-		for i := 0; i < int(bdata.udifBlockData.ChunkCount); i++ {
-			var chunk udifBlockChunk
-			binary.Read(r, binary.BigEndian, &chunk)
-			bdata.Chunks = append(bdata.Chunks, udifBlockChunk{
-				Type:             chunk.Type,
-				Comment:          chunk.Comment,
-				DiskOffset:       (chunk.DiskOffset + bdata.StartSector) * sectorSize,
-				DiskLength:       chunk.DiskLength * sectorSize,
-				CompressedOffset: chunk.CompressedOffset + bdata.DataOffset,
-				CompressedLength: chunk.CompressedLength,
-			})
+	if checksumBlocks, ok := d.Plist.ResourceFork["cSum"]; ok {
+		// TODO: parse checksum data (find sample data)
+		for _, checksum := range checksumBlocks {
+			log.Debugf("'cSum' data for block: '%s'", checksum.Name)
 		}
+	}
 
-		d.Blocks = append(d.Blocks, bdata)
+	if sizeBlocks, ok := d.Plist.ResourceFork["size"]; ok {
+		// TODO: parse size data (find sample data)
+		for _, size := range sizeBlocks {
+			log.Debugf("'size' data for block: '%s'", size.Name)
+		}
 	}
 
 	return d, nil
@@ -587,9 +609,9 @@ func (d *DMG) GetSize() uint64 {
 	return d.Footer.SectorCount * sectorSize
 }
 
-// GetBlock returns the size of the DMG data
-func (d *DMG) GetBlock(name string) (*UDIFBlockData, error) {
-	for _, block := range d.Blocks {
+// Partition returns a partition by name
+func (d *DMG) Partition(name string) (*Partition, error) {
+	for _, block := range d.Partitions {
 		if strings.Contains(block.Name, name) {
 			return &block, nil
 		}
@@ -603,7 +625,8 @@ func (d *DMG) Load() error {
 	var out bytes.Buffer
 	dat := make([]byte, 0, blockSize)
 
-	block, err := d.GetBlock("Primary GPT Header")
+	/* Primary GPT Header */
+	block, err := d.Partition("Primary GPT Header")
 	if err != nil {
 		return fmt.Errorf("failed to load and verify GPT: %w", err)
 	}
@@ -623,12 +646,13 @@ func (d *DMG) Load() error {
 		return fmt.Errorf("failed to verify GPT header: %w", err)
 	}
 
-	block, err = d.GetBlock("Primary GPT Table")
+	out.Reset()
+
+	/* Primary GPT Table */
+	block, err = d.Partition("Primary GPT Table")
 	if err != nil {
 		return fmt.Errorf("failed to load and verify GPT: %w", err)
 	}
-
-	out.Reset()
 
 	for i, chunk := range block.Chunks {
 		if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
@@ -649,7 +673,7 @@ func (d *DMG) Load() error {
 		case gpt.HFSPlus:
 			fallthrough
 		case gpt.Apple_APFS:
-			for i, block := range d.Blocks {
+			for i, block := range d.Partitions {
 				if block.udifBlockData.StartSector == part.StartingLBA {
 					found = true
 					d.firstAPFSPartition = i
@@ -679,19 +703,6 @@ func (d *DMG) Load() error {
 		return fmt.Errorf("failed to find Apple_APFS partition in DMG")
 	}
 
-	out.Reset()
-
-	block, err = d.GetBlock("disk image")
-	if err != nil {
-		return fmt.Errorf("failed to get disk image block: %w", err)
-	}
-	for i, chunk := range block.Chunks {
-		if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
-			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
-		}
-		os.WriteFile("disk.img", out.Bytes(), 0644)
-	}
-
 	return nil
 }
 
@@ -710,7 +721,7 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 	off += int64(d.apfsPartitionOffset) // map offset from start of Apple_APFS partition
 	length := int64(len(buf))
 
-	apfsChunks := d.Blocks[d.firstAPFSPartition].Chunks
+	apfsChunks := d.Partitions[d.firstAPFSPartition].Chunks
 
 	entryIdx := len(apfsChunks)
 
@@ -802,7 +813,7 @@ func (d *DMG) ReadFile(w *bufio.Writer, off, length int64) (err error) {
 
 	off += int64(d.apfsPartitionOffset) // map offset from start of Apple_APFS partition
 
-	apfsChunks := d.Blocks[d.firstAPFSPartition].Chunks
+	apfsChunks := d.Partitions[d.firstAPFSPartition].Chunks
 
 	entryIdx := len(apfsChunks)
 
