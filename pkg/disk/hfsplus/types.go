@@ -83,7 +83,7 @@ func (t hfsTime) String() string {
 
 type UniStr255 struct {
 	Length  uint16
-	UniChar [255]uint16
+	UniChar []uint16
 }
 
 // UniStr255FromString creates a UniStr255 from a Go string
@@ -132,6 +132,35 @@ const (
 	HFSBogusExtentFileID      CatalogNodeID = 15
 	HFSFirstUserCatalogNodeID CatalogNodeID = 16
 )
+
+func (id CatalogNodeID) String() string {
+	switch id {
+	case HFSRootParentID:
+		return "RootParent"
+	case HFSRootFolderID:
+		return "RootFolder"
+	case HFSExtentsFileID:
+		return "ExtentsFile"
+	case HFSCatalogFileID:
+		return "CatalogFile"
+	case HFSBadBlockFileID:
+		return "BadBlockFile"
+	case HFSAllocationFileID:
+		return "AllocationFile"
+	case HFSStartupFileID:
+		return "StartupFile"
+	case HFSAttributesFileID:
+		return "AttributesFile"
+	case HFSRepairCatalogFileID:
+		return "RepairCatalogFile"
+	case HFSBogusExtentFileID:
+		return "BogusExtentFile"
+	case HFSFirstUserCatalogNodeID:
+		return "FirstUserCatalogNode"
+	default:
+		return fmt.Sprintf("Unknown CatalogNodeID(%d)", id)
+	}
+}
 
 type ExtentRecord [8]ExtentDescriptor
 
@@ -252,11 +281,27 @@ type Catalog struct {
 type RecordType int16
 
 const (
+	HFSPlusNoneRecord         RecordType = 0x0000
 	HFSPlusFolderRecord       RecordType = 0x0001
 	HFSPlusFileRecord         RecordType = 0x0002
 	HFSPlusFolderThreadRecord RecordType = 0x0003
 	HFSPlusFileThreadRecord   RecordType = 0x0004
 )
+
+func (rt RecordType) String() string {
+	switch rt {
+	case HFSPlusFolderRecord:
+		return "Folder"
+	case HFSPlusFileRecord:
+		return "File"
+	case HFSPlusFolderThreadRecord:
+		return "FolderThread"
+	case HFSPlusFileThreadRecord:
+		return "FileThread"
+	default:
+		return fmt.Sprintf("Unknown (%d)", rt)
+	}
+}
 
 type CatalogFolder struct {
 	RecordType       RecordType
@@ -353,21 +398,30 @@ type FolderRecord struct {
 	SubDir     []BTRecord // folders and files
 }
 
+func (fdr *FolderRecord) String() string {
+	return fmt.Sprintf("'%s' parent=%d, folderID=%d, type=%s, created=%s",
+		&fdr.Key.NodeName,
+		fdr.Key.ParentID,
+		fdr.FolderInfo.FolderID,
+		fdr.FolderInfo.RecordType,
+		fdr.FolderInfo.CreateDate,
+	)
+}
+
 func (fdr *FolderRecord) Unmarshal(r io.Reader) error {
-	// folder key
-	keyData := make([]byte, fdr.Key.KeyLength)
-	if _, err := io.ReadFull(r, keyData); err != nil {
-		return fmt.Errorf("failed to read folder key: %v", err)
+	if err := binary.Read(r, binary.BigEndian, &fdr.Key.ParentID); err != nil {
+		return fmt.Errorf("failed to read folder key parent ID: %v", err)
 	}
-	// record data (link to child node)
+	if err := binary.Read(r, binary.BigEndian, &fdr.Key.NodeName.Length); err != nil {
+		return fmt.Errorf("failed to read folder key name length: %v", err)
+	}
+	fdr.Key.NodeName.UniChar = make([]uint16, fdr.Key.NodeName.Length)
+	if err := binary.Read(r, binary.BigEndian, &fdr.Key.NodeName.UniChar); err != nil {
+		return fmt.Errorf("failed to read folder key name: %v", err)
+	}
 	if err := binary.Read(r, binary.BigEndian, &fdr.FolderInfo); err != nil {
 		return fmt.Errorf("failed to read folder info: %v", err)
 	}
-	fdr.Key = CatalogKey{
-		ParentID: CatalogNodeID(binary.BigEndian.Uint32(keyData[:4])),
-		NodeName: UniStr255FromString(string(keyData[4:])),
-	}
-	fmt.Println(fdr.Key.NodeName.String())
 	return nil
 }
 
@@ -386,21 +440,30 @@ type FileRecord struct {
 	FileData FileData
 }
 
+func (fr *FileRecord) String() string {
+	return fmt.Sprintf("'%s' parent=%d, fileID=%d, type=%s, created=%s",
+		&fr.Key.NodeName,
+		fr.Key.ParentID,
+		fr.FileInfo.FileID,
+		fr.FileInfo.RecordType,
+		fr.FileInfo.CreateDate,
+	)
+}
+
 func (fr *FileRecord) Unmarshal(r io.Reader) error {
-	// file key
-	keyData := make([]byte, fr.Key.KeyLength)
-	if _, err := io.ReadFull(r, keyData); err != nil {
-		return fmt.Errorf("failed to read file key: %v", err)
+	if err := binary.Read(r, binary.BigEndian, &fr.Key.ParentID); err != nil {
+		return fmt.Errorf("failed to read file key parent ID: %v", err)
 	}
-	// record data (link to child node)
+	if err := binary.Read(r, binary.BigEndian, &fr.Key.NodeName.Length); err != nil {
+		return fmt.Errorf("failed to read file key name length: %v", err)
+	}
+	fr.Key.NodeName.UniChar = make([]uint16, fr.Key.NodeName.Length)
+	if err := binary.Read(r, binary.BigEndian, &fr.Key.NodeName.UniChar); err != nil {
+		return fmt.Errorf("failed to read file key name: %v", err)
+	}
 	if err := binary.Read(r, binary.BigEndian, &fr.FileInfo); err != nil {
-		return fmt.Errorf("failed to read file info: %v", err)
+		return fmt.Errorf("failed to read file.fileinfo: %v", err)
 	}
-	fr.Key = CatalogKey{
-		ParentID: CatalogNodeID(binary.BigEndian.Uint32(keyData[:4])),
-		NodeName: UniStr255FromString(string(keyData[4:])),
-	}
-	fmt.Println(fr.Key.NodeName.String())
 	return nil
 }
 
@@ -472,6 +535,7 @@ type BTRecord interface {
 	// RecordType() RecordType
 	// RecordData() []byte
 	Unmarshal(r io.Reader) error
+	String() string
 }
 
 // BTNode represents a B-tree node in the filesystem
@@ -488,20 +552,23 @@ type CatalogRecord struct {
 	Child    BTNode
 }
 
+func (cr *CatalogRecord) String() string {
+	return fmt.Sprintf("'%s' parent=%d, link=%d", &cr.Key.NodeName, cr.Key.ParentID, cr.Link)
+}
+
 func (cr *CatalogRecord) Unmarshal(r io.Reader) error {
-	// catalog key
-	keyData := make([]byte, cr.Key.KeyLength)
-	if _, err := io.ReadFull(r, keyData); err != nil {
-		return fmt.Errorf("failed to read catalog key: %v", err)
+	if err := binary.Read(r, binary.BigEndian, &cr.Key.ParentID); err != nil {
+		return fmt.Errorf("failed to read catalog key parent ID: %v", err)
 	}
-	// record data (link to child node)
+	if err := binary.Read(r, binary.BigEndian, &cr.Key.NodeName.Length); err != nil {
+		return fmt.Errorf("failed to read catalog key name length: %v", err)
+	}
+	cr.Key.NodeName.UniChar = make([]uint16, cr.Key.NodeName.Length)
+	if err := binary.Read(r, binary.BigEndian, &cr.Key.NodeName.UniChar); err != nil {
+		return fmt.Errorf("failed to read catalog key name: %v", err)
+	}
 	if err := binary.Read(r, binary.BigEndian, &cr.Link); err != nil {
 		return fmt.Errorf("failed to read catalog record link: %v", err)
 	}
-	cr.Key = CatalogKey{
-		ParentID: CatalogNodeID(binary.BigEndian.Uint32(keyData[:4])),
-		NodeName: UniStr255FromString(string(keyData[4:])),
-	}
-	fmt.Println(cr.Key.NodeName.String())
 	return nil
 }
