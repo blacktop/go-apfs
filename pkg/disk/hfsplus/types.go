@@ -9,10 +9,24 @@ import (
 	"unicode/utf16"
 )
 
+type Signature uint16
+
 const (
-	HFSPlusSigWord = 0x482B // "H+"
-	HFSXSigWord    = 0x4858 // "HX"
+	HFSPlusSigWord Signature = 0x482B // "H+"
+	HFSXSigWord    Signature = 0x4858 // "HX"
 )
+
+func (s Signature) String() string {
+	switch s {
+	case HFSPlusSigWord:
+		return "HFS+"
+	case HFSXSigWord:
+		return "HFSX"
+	default:
+		return fmt.Sprintf("unknown(%#04x)", s)
+	}
+
+}
 
 const (
 	kHFSVolumeUnmountedBit    = 0x00000001 // volume was not unmounted cleanly
@@ -177,8 +191,8 @@ type ForkData struct {
 }
 
 type VolumeHeader struct {
-	Signature          uint16 // 'H+' or 'HX'
-	Version            uint16 // 4 for HFS+ and 5 for HFSX
+	Signature          Signature // 'H+' or 'HX'
+	Version            uint16    // 4 for HFS+ and 5 for HFSX
 	Attributes         hfsAttributes
 	LastMountedVersion [4]byte
 	JournalInfoBlock   uint32
@@ -207,15 +221,6 @@ type VolumeHeader struct {
 }
 
 func (hdr *VolumeHeader) String() string {
-	var sig string
-	switch hdr.Signature {
-	case HFSPlusSigWord:
-		sig = "H+"
-	case HFSXSigWord:
-		sig = "HX"
-	default:
-		sig = fmt.Sprintf("%x", hdr.Signature)
-	}
 	return fmt.Sprintf(
 		"Signature:          %s\n"+
 			"Version:            %d\n"+
@@ -225,7 +230,7 @@ func (hdr *VolumeHeader) String() string {
 			"ModifyDate:         %s\n"+
 			"BackupDate:         %s\n"+
 			"CheckedDate:        %s\n",
-		sig,
+		hdr.Signature,
 		hdr.Version,
 		hdr.Attributes.String(),
 		string(hdr.LastMountedVersion[:]),
