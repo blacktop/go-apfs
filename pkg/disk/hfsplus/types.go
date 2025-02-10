@@ -347,10 +347,28 @@ type CatalogKey struct {
 
 /* File & Folder Records */
 
-type Folder struct {
+type FolderRecord struct {
 	Key        CatalogKey
 	FolderInfo CatalogFolder
-	// SubDir     []Folder
+	SubDir     []BTRecord // folders and files
+}
+
+func (fdr *FolderRecord) Unmarshal(r io.Reader) error {
+	// folder key
+	keyData := make([]byte, fdr.Key.KeyLength)
+	if _, err := io.ReadFull(r, keyData); err != nil {
+		return fmt.Errorf("failed to read folder key: %v", err)
+	}
+	// record data (link to child node)
+	if err := binary.Read(r, binary.BigEndian, &fdr.FolderInfo); err != nil {
+		return fmt.Errorf("failed to read folder info: %v", err)
+	}
+	fdr.Key = CatalogKey{
+		ParentID: CatalogNodeID(binary.BigEndian.Uint32(keyData[:4])),
+		NodeName: UniStr255FromString(string(keyData[4:])),
+	}
+	fmt.Println(fdr.Key.NodeName.String())
+	return nil
 }
 
 type FileBlock struct {
@@ -362,10 +380,28 @@ type FileData struct {
 	Block FileBlock
 }
 
-type File struct {
+type FileRecord struct {
 	Key      CatalogKey
 	FileInfo CatalogFile
 	FileData FileData
+}
+
+func (fr *FileRecord) Unmarshal(r io.Reader) error {
+	// file key
+	keyData := make([]byte, fr.Key.KeyLength)
+	if _, err := io.ReadFull(r, keyData); err != nil {
+		return fmt.Errorf("failed to read file key: %v", err)
+	}
+	// record data (link to child node)
+	if err := binary.Read(r, binary.BigEndian, &fr.FileInfo); err != nil {
+		return fmt.Errorf("failed to read file info: %v", err)
+	}
+	fr.Key = CatalogKey{
+		ParentID: CatalogNodeID(binary.BigEndian.Uint32(keyData[:4])),
+		NodeName: UniStr255FromString(string(keyData[4:])),
+	}
+	fmt.Println(fr.Key.NodeName.String())
+	return nil
 }
 
 /* B-tree */
@@ -453,46 +489,19 @@ type CatalogRecord struct {
 }
 
 func (cr *CatalogRecord) Unmarshal(r io.Reader) error {
-	// Read the catalog key
+	// catalog key
 	keyData := make([]byte, cr.Key.KeyLength)
 	if _, err := io.ReadFull(r, keyData); err != nil {
 		return fmt.Errorf("failed to read catalog key: %v", err)
 	}
-
-	// Read the record data (link to child node)
+	// record data (link to child node)
 	if err := binary.Read(r, binary.BigEndian, &cr.Link); err != nil {
 		return fmt.Errorf("failed to read catalog record link: %v", err)
 	}
-
-	// Store the key data
 	cr.Key = CatalogKey{
 		ParentID: CatalogNodeID(binary.BigEndian.Uint32(keyData[:4])),
 		NodeName: UniStr255FromString(string(keyData[4:])),
 	}
-
 	fmt.Println(cr.Key.NodeName.String())
-
-	return nil
-}
-
-type FolderRecord struct {
-	Key      CatalogKey
-	Link     uint32
-	ChildPos int64
-	Child    BTNode
-}
-
-func (fdr *FolderRecord) Unmarshal(r io.Reader) error {
-	return nil
-}
-
-type FileRecord struct {
-	Key      CatalogKey
-	Link     uint32
-	ChildPos int64
-	Child    BTNode
-}
-
-func (fr *FileRecord) Unmarshal(r io.Reader) error {
 	return nil
 }
