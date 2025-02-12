@@ -176,12 +176,12 @@ func (id CatalogNodeID) String() string {
 	}
 }
 
-type ExtentRecord [8]ExtentDescriptor
-
 type ExtentDescriptor struct {
 	StartBlock uint32
 	BlockCount uint32
 }
+
+type ExtentRecord [8]ExtentDescriptor
 
 type ForkData struct {
 	LogicalSize uint64
@@ -279,15 +279,9 @@ type ExtendedFolderInfo struct {
 	PutAwayFolderID     int32
 }
 
-type Catalog struct {
-	Header BTHeaderNode
-	Root   BTNode
-}
-
 type RecordType int16
 
 const (
-	HFSPlusNoneRecord         RecordType = 0x0000
 	HFSPlusFolderRecord       RecordType = 0x0001
 	HFSPlusFileRecord         RecordType = 0x0002
 	HFSPlusFolderThreadRecord RecordType = 0x0003
@@ -323,7 +317,7 @@ type CatalogFolder struct {
 	UserInfo         FolderInfo
 	FinderInfo       ExtendedFolderInfo
 	TextEncoding     uint32
-	Reserved         uint32
+	SubfolderCount   uint32 // ???
 }
 
 type ExtendedFileInfo struct {
@@ -396,6 +390,13 @@ type CatalogKey struct {
 	NodeName  UniStr255
 }
 
+type CatalogThread struct {
+	RecordType RecordType
+	Reserved   int16     // reserved - initialized as zero
+	ParentID   uint32    // parent ID for this catalog node
+	NodeName   UniStr255 // name of this catalog node (variable length)
+}
+
 /* File & Folder Records */
 
 type FolderRecord struct {
@@ -430,6 +431,8 @@ func (fdr *FolderRecord) Unmarshal(r io.Reader) error {
 	}
 	return nil
 }
+
+func (fdr *FolderRecord) Type() BTreeNodeKind { return BTLeafNodeKind }
 
 type FileBlock struct {
 	Data  []byte
@@ -473,6 +476,8 @@ func (fr *FileRecord) Unmarshal(r io.Reader) error {
 	return nil
 }
 
+func (fr *FileRecord) Type() BTreeNodeKind { return BTLeafNodeKind }
+
 /* B-tree */
 
 type BTreeNodeKind int8
@@ -508,6 +513,14 @@ type BTNodeDescriptor struct {
 	Reserved   uint16
 }
 
+type BtreeType uint8
+
+const (
+	BtHFS      BtreeType = 0   // control file
+	BtUser     BtreeType = 128 // user btree type starts from 128
+	BtReserved BtreeType = 255 // reserved
+)
+
 type BTHeaderRec struct {
 	TreeDepth      uint16
 	RootNode       uint32
@@ -520,7 +533,7 @@ type BTHeaderRec struct {
 	FreeNodes      uint32
 	Reserved1      uint16
 	ClumpSize      uint32 // misaligned
-	BtreeType      uint8
+	BtreeType      BtreeType
 	KeyCompareType uint8
 	Attributes     uint32 // long aligned again
 	Reserved3      [16]uint32
@@ -536,19 +549,21 @@ type BTHeaderNode struct {
 
 // BTRecord represents a record in a B-tree node: CatalogRecord, FolderRecord, FileRecord
 type BTRecord interface {
-	// KeyLength() uint16
-	// Key() []byte
-	// RecordType() RecordType
-	// RecordData() []byte
 	Unmarshal(r io.Reader) error
 	String() string
+	Type() BTreeNodeKind
 }
 
-// BTNode represents a B-tree node in the filesystem
 type BTNode struct {
 	Descriptor BTNodeDescriptor
 	Records    []BTRecord
 	NodeSize   int // added: node size (in bytes) from the header record
+}
+
+// BTNode represents a B-tree node in the filesystem
+type BTree struct {
+	BTHeaderNode
+	Root *BTNode
 }
 
 type CatalogRecord struct {
@@ -578,3 +593,5 @@ func (cr *CatalogRecord) Unmarshal(r io.Reader) error {
 	}
 	return nil
 }
+
+func (cr *CatalogRecord) Type() BTreeNodeKind { return BTIndexNodeKind }
