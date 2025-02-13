@@ -652,6 +652,9 @@ type FileRecord struct {
 	Key      CatalogKey
 	FileInfo HFSPlusCatalogFile
 	FileData FileData
+
+	blkSize uint32
+	r       *io.ReaderAt
 }
 
 func (fr *FileRecord) String() string {
@@ -685,6 +688,10 @@ func (fr *FileRecord) Unmarshal(r io.Reader) error {
 }
 
 func (fr *FileRecord) Type() BTreeNodeKind { return BTLeafNodeKind }
+
+func (fr *FileRecord) Reader() io.Reader {
+	return io.NewSectionReader(*fr.r, int64(fr.FileInfo.DataFork.Extents[0].StartBlock*fr.blkSize), int64(fr.FileInfo.DataFork.LogicalSize))
+}
 
 type ThreadKey struct {
 	KeyLength uint16
@@ -744,6 +751,8 @@ const (
 	HFSPlusAttrForkData   = 0x20 /* extent based attributes (data lives in extents) */
 	HFSPlusAttrExtents    = 0x30 /* overflow extents for large attributes */
 )
+
+// TODO: add the rest of the __APPLE_API_UNSTABLE types from 'Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/hfs/hfs_format.h'
 
 /* B-tree structures */
 

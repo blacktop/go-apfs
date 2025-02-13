@@ -122,6 +122,8 @@ func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, files *
 			switch r := record.(type) {
 			case *FileRecord:
 				if r.Key.ParentID == folderID {
+					r.r = &fs.device
+					r.blkSize = fs.volumeHdr.BlockSize
 					*files = append(*files, r)
 				}
 			}
