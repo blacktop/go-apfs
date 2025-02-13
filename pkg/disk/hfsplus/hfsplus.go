@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 )
 
 // HFSPlus represents a mounted HFS+ filesystem
@@ -17,10 +18,10 @@ type HFSPlus struct {
 	closer io.Closer // Add this field to track closeable resources
 
 	// Cache commonly accessed structures
-	catalogBTree    *BTNode
-	extentsBTree    *BTNode
-	attributesBTree *BTNode
-	startupBTree    *BTNode
+	catalogBTree    *BTree
+	extentsBTree    *BTree
+	attributesBTree *BTree
+	startupBTree    *BTree
 }
 
 // Open creates a new HFSPlus instance from a file path
@@ -63,7 +64,6 @@ func New(device io.ReaderAt) (*HFSPlus, error) {
 		return nil, fmt.Errorf("invalid HFS+ signature: %x", fs.volumeHdr.Signature)
 	}
 
-	fmt.Println("Volume Header:")
 	fmt.Println(fs.volumeHdr.String())
 
 	// Initialize B-trees
@@ -72,6 +72,27 @@ func New(device io.ReaderAt) (*HFSPlus, error) {
 	}
 
 	return fs, nil
+}
+
+func (fs *HFSPlus) Files() ([]*FileRecord, error) {
+	var files []*FileRecord
+
+	// Start from catalog B-tree root
+	if fs.catalogBTree == nil {
+		return nil, fmt.Errorf("catalog B-tree not initialized")
+	}
+
+	// Recursively traverse the B-tree
+	if err := fs.listFilesInNode(fs.catalogBTree.Root, HFSRootFolderID, &files); err != nil {
+		return nil, fmt.Errorf("failed to list files: %v", err)
+	}
+
+	return files, nil
+}
+
+func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, files *[]*FileRecord) error {
+
+	return nil
 }
 
 // initBTrees initializes the catalog, extents, attributes and startup B-trees
@@ -110,122 +131,153 @@ func (fs *HFSPlus) initBTrees() (err error) {
 }
 
 // readBTree reads an HFS+ B-tree from the fork data following TN1150.
-func (fs *HFSPlus) readBTree(forkData ForkData) (*BTNode, error) {
+func (fs *HFSPlus) readBTree(forkData ForkData) (btree *BTree, err error) {
 	// The B-tree fork begins at the first extent.
 	headerOffset := int64(forkData.Extents[0].StartBlock) * int64(fs.volumeHdr.BlockSize)
-	// Read header node descriptor.
-	var headerNode BTHeaderNode
+
+	btree = &BTree{}
 	sr := io.NewSectionReader(fs.device, headerOffset, 1>>64-1)
-	if err := binary.Read(sr, binary.BigEndian, &headerNode.Descriptor); err != nil {
+	if err := binary.Read(sr, binary.BigEndian, &btree.BTHeaderNode.Descriptor); err != nil {
 		return nil, fmt.Errorf("failed to read header node descriptor: %v", err)
 	}
-	if headerNode.Descriptor.Kind != BTHeaderNodeKind {
-		return nil, fmt.Errorf("invalid header node kind: %s", headerNode.Descriptor.Kind)
+	if btree.BTHeaderNode.Descriptor.Kind != BTHeaderNodeKind {
+		return nil, fmt.Errorf("invalid header node kind: %s", btree.BTHeaderNode.Descriptor.Kind)
 	}
-	if err := binary.Read(sr, binary.BigEndian, &headerNode.Header); err != nil {
+	if err := binary.Read(sr, binary.BigEndian, &btree.BTHeaderNode.Header); err != nil {
 		return nil, fmt.Errorf("failed to read header record: %v", err)
 	}
-	if err := binary.Read(sr, binary.BigEndian, &headerNode.UserDataRecord); err != nil {
+	if err := binary.Read(sr, binary.BigEndian, &btree.BTHeaderNode.UserDataRecord); err != nil {
 		return nil, fmt.Errorf("failed to read user data record: %v", err)
 	}
-	headerNode.Map = make([]uint8, headerNode.Header.NodeSize-256)
-	if err := binary.Read(sr, binary.BigEndian, &headerNode.Map); err != nil {
+	btree.BTHeaderNode.Map = make([]uint8, btree.BTHeaderNode.Header.NodeSize-256)
+	if err := binary.Read(sr, binary.BigEndian, &btree.BTHeaderNode.Map); err != nil {
 		return nil, fmt.Errorf("failed to read map: %v", err)
 	}
-	if err := binary.Read(sr, binary.BigEndian, &headerNode.Offsets); err != nil {
+	if err := binary.Read(sr, binary.BigEndian, &btree.BTHeaderNode.Offsets); err != nil {
 		return nil, fmt.Errorf("failed to read offsets: %v", err)
 	}
+
 	// Calculate the absolute offset to the root node:
-	rootOffset := headerOffset + int64(headerNode.Header.RootNode)*int64(headerNode.Header.NodeSize)
-	rootNode, err := fs.readBTreeNodeAtOffset(rootOffset, int(headerNode.Header.NodeSize), forkData)
+	rootOffset := headerOffset + int64(btree.BTHeaderNode.Header.RootNode)*int64(btree.BTHeaderNode.Header.NodeSize)
+	btree.Root, err = fs.readBTreeNodeAtOffset(rootOffset, int(btree.BTHeaderNode.Header.NodeSize), forkData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read root node: %v", err)
 	}
-	rootNode.NodeSize = int(headerNode.Header.NodeSize)
-	return rootNode, nil
+
+	return btree, nil
+}
+
+func (fs *HFSPlus) getNodeOffset(link uint32, nodeSize int) int64 {
+	localBlock := int64(nodeSize) * int64(link) / int64(fs.volumeHdr.BlockSize)
+	driveBlock := int64(0) // Find the extent containing this block
+	for _, extent := range fs.volumeHdr.CatalogFile.Extents {
+		if localBlock < int64(extent.BlockCount) {
+			driveBlock = int64(extent.StartBlock) + localBlock
+			break
+		}
+		localBlock -= int64(extent.BlockCount)
+	}
+	return driveBlock * int64(fs.volumeHdr.BlockSize)
 }
 
 // readBTreeNodeAtOffset reads a B-tree node at the given offset with the given node size.
-// It follows the HFS+ node layout per TN1150.
-func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData ForkData) (*BTNode, error) {
+func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData ForkData) (node *BTNode, err error) {
 	sr := io.NewSectionReader(fs.device, offset, int64(nodeSize))
-	node := BTNode{NodeSize: nodeSize}
+
+	node = &BTNode{NodeSize: nodeSize}
 	if err := binary.Read(sr, binary.BigEndian, &node.Descriptor); err != nil {
 		return nil, fmt.Errorf("failed to read node descriptor: %v", err)
 	}
+
 	if node.Descriptor.Kind == BTHeaderNodeKind {
-		// header nodes do not contain records.
-		return &node, nil
+		return node, nil // header nodes do not contain records.
 	}
-	// The record offset array is stored at the end of the node.
-	offsetArrayStart := offset + int64(nodeSize) - (2 * int64(node.Descriptor.NumRecords))
-	offReader := io.NewSectionReader(fs.device, offsetArrayStart, 2*int64(node.Descriptor.NumRecords))
-	offsets := make([]uint16, node.Descriptor.NumRecords)
-	if err := binary.Read(offReader, binary.BigEndian, &offsets); err != nil {
+
+	deltas := make([]uint16, node.Descriptor.NumRecords)
+	if err := binary.Read(
+		io.NewSectionReader(
+			fs.device,
+			// The record offset array is stored at the end of the node.
+			offset+int64(nodeSize)-(2*int64(node.Descriptor.NumRecords)),
+			2*int64(node.Descriptor.NumRecords),
+		),
+		binary.BigEndian,
+		&deltas,
+	); err != nil {
 		return nil, fmt.Errorf("failed to read record offsets: %v", err)
 	}
+	slices.Reverse(deltas) // offset deltas are stored in reverse order.
 
-	node.Records = make([]BTRecord, node.Descriptor.NumRecords)
-	for i := uint16(0); i < node.Descriptor.NumRecords; i++ {
-		// Offsets are stored in reverse order.
-		recordStart := int64(offsets[node.Descriptor.NumRecords-1-i])
-		var recordLength int64
-		if i == 0 {
-			// Length of the first (logical) record.
-			recordLength = int64(nodeSize) - recordStart - (2 * int64(node.Descriptor.NumRecords))
-		} else {
-			recordLength = int64(offsets[node.Descriptor.NumRecords-i] - offsets[node.Descriptor.NumRecords-1-i])
-		}
-		if recordLength < 0 {
-			return nil, fmt.Errorf("invalid record length: %d", recordLength)
-		}
+	offsets := make([]int64, node.Descriptor.NumRecords)
+	for i, detla := range deltas {
+		offsets[i] = offset + int64(detla)
+		fmt.Printf("record offset: %x\n", offsets[i])
+	}
 
-		recReader := io.NewSectionReader(fs.device, offset+recordStart, recordLength)
-		// First read key length.
-		var keyLength uint16
-		if err := binary.Read(recReader, binary.BigEndian, &keyLength); err != nil {
-			return nil, fmt.Errorf("failed to read key length: %v", err)
-		}
-
-		// Create the proper record type based on node kind and fork type.
+	for _, offset := range offsets {
 		var record BTRecord
 		switch node.Descriptor.Kind {
 		case BTIndexNodeKind:
-			record = &CatalogRecord{
-				Key: CatalogKey{
-					KeyLength: keyLength,
-				},
+			record = &CatalogRecord{}
+			if err := record.Unmarshal(sr); err != nil {
+				return nil, fmt.Errorf("failed to read record: %v", err)
 			}
+			childOffset := fs.getNodeOffset(record.(*CatalogRecord).Link, nodeSize)
+			child, err := fs.readBTreeNodeAtOffset(childOffset, nodeSize, forkData)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read child node: %v", err)
+			}
+			record.(*CatalogRecord).Child = *child
 		case BTLeafNodeKind:
-			var rtype RecordType
-			if err := binary.Read(recReader, binary.BigEndian, &rtype); err != nil {
-				return nil, fmt.Errorf("failed to read record type: %v", err)
-			}
-			switch rtype {
-			case HFSPlusFolderRecord:
-				record = &FolderRecord{}
-			case HFSPlusFileRecord:
-				record = &FileRecord{}
-			default:
-				return nil, fmt.Errorf("unknown B-tree record type for leaf node")
+			record, err = fs.readBTRecordAt(offset)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read record: %v", err)
 			}
 		default:
 			return nil, fmt.Errorf("unsupported node kind: %s", node.Descriptor.Kind)
 		}
-		if err := record.Unmarshal(recReader); err != nil {
-			return nil, fmt.Errorf("failed to read record: %v", err)
-		}
-		node.Records[i] = record
+		node.Records = append(node.Records, record)
 	}
-	return &node, nil
+
+	return node, nil
 }
 
-func (root *BTNode) Files(folderID uint32) ([]*FileRecord, error) {
-	var files []*FileRecord
-	// for _, record := range root.Records {
-	// 	if record.Type() == HFSPlusFileRecord {
-	// 		files = append(files, record.(*FileRecord))
-	// 	}
-	// }
-	return files, nil
+func (fs *HFSPlus) readBTRecordAt(offset int64) (record BTRecord, err error) {
+	sr := io.NewSectionReader(fs.device, offset, 1<<63-1)
+
+	var keyLength uint16
+	if err := binary.Read(sr, binary.BigEndian, &keyLength); err != nil {
+		return nil, fmt.Errorf("failed to read key length: %v", err)
+	}
+
+	sr.Seek(int64(keyLength), io.SeekCurrent) // skip past key
+
+	var recordType RecordType
+	if err := binary.Read(sr, binary.BigEndian, &recordType); err != nil {
+		return nil, fmt.Errorf("failed to read record type: %v", err)
+	}
+
+	sr.Seek(-int64(keyLength+uint16(binary.Size(keyLength)))-int64(binary.Size(recordType)), io.SeekCurrent) // rewind to start of record
+
+	switch recordType {
+	case HFSPlusFolderRecord:
+		record = &FolderRecord{}
+		if err := record.Unmarshal(sr); err != nil {
+			return nil, fmt.Errorf("failed to read record: %v", err)
+		}
+	case HFSPlusFileRecord:
+		record = &FileRecord{}
+		if err := record.Unmarshal(sr); err != nil {
+			return nil, fmt.Errorf("failed to read record: %v", err)
+		}
+	case HFSPlusFolderThreadRecord, HFSPlusFileThreadRecord:
+		record = &ThreadRecord{}
+		if err := record.Unmarshal(sr); err != nil {
+			return nil, fmt.Errorf("failed to read record: %v", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported record type: %s", recordType)
+	}
+
+	return record, nil
 }
