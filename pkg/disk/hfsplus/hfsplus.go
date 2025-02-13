@@ -91,6 +91,42 @@ func (fs *HFSPlus) Files() ([]*FileRecord, error) {
 }
 
 func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, files *[]*FileRecord) error {
+	// Handle different node types
+	switch node.Descriptor.Kind {
+	case BTIndexNodeKind:
+		// For index nodes, recursively traverse child nodes that could contain our folder
+		for _, record := range node.Records {
+			if catalogRecord, ok := record.(*CatalogRecord); ok {
+				// Check if this branch could contain our folder
+				if catalogRecord.Key.ParentID <= folderID {
+					// Get child node offset
+					childOffset := fs.getNodeOffset(catalogRecord.Link, int(fs.catalogBTree.BTHeaderNode.Header.NodeSize))
+
+					// Read child node
+					childNode, err := fs.readBTreeNodeAtOffset(childOffset, int(fs.catalogBTree.BTHeaderNode.Header.NodeSize), fs.volumeHdr.CatalogFile)
+					if err != nil {
+						return fmt.Errorf("failed to read child node: %v", err)
+					}
+
+					// Recursively process child node
+					if err := fs.listFilesInNode(childNode, folderID, files); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+	case BTLeafNodeKind:
+		// For leaf nodes, collect file records that match our folder ID
+		for _, record := range node.Records {
+			switch r := record.(type) {
+			case *FileRecord:
+				if r.Key.ParentID == folderID {
+					*files = append(*files, r)
+				}
+			}
+		}
+	}
 
 	return nil
 }
@@ -211,7 +247,7 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 	offsets := make([]int64, node.Descriptor.NumRecords)
 	for i, detla := range deltas {
 		offsets[i] = offset + int64(detla)
-		fmt.Printf("record offset: %x\n", offsets[i])
+		// fmt.Printf("record offset: %x\n", offsets[i])
 	}
 
 	for _, offset := range offsets {
