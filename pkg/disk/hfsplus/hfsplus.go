@@ -64,8 +64,6 @@ func New(device io.ReaderAt) (*HFSPlus, error) {
 		return nil, fmt.Errorf("invalid HFS+ signature: %x", fs.volumeHdr.Signature)
 	}
 
-	fmt.Println(fs.volumeHdr.String())
-
 	// Initialize B-trees
 	if err := fs.initBTrees(); err != nil {
 		return nil, err
