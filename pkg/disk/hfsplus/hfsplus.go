@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"slices"
+
+	"github.com/apex/log"
 )
 
 // HFSPlus represents a mounted HFS+ filesystem
@@ -119,11 +121,11 @@ func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, files *
 		for _, record := range node.Records {
 			switch r := record.(type) {
 			case *FileRecord:
-				if r.Key.ParentID == folderID {
-					r.r = &fs.device
-					r.blkSize = fs.volumeHdr.BlockSize
-					*files = append(*files, r)
-				}
+				// if r.Key.ParentID == folderID {
+				r.r = &fs.device
+				r.blkSize = fs.volumeHdr.BlockSize
+				*files = append(*files, r)
+				// }
 			}
 		}
 	}
@@ -269,6 +271,7 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 			if err != nil {
 				return nil, fmt.Errorf("failed to read record: %v", err)
 			}
+			log.Debugf("read record: %s", record)
 		default:
 			return nil, fmt.Errorf("unsupported node kind: %s", node.Descriptor.Kind)
 		}
