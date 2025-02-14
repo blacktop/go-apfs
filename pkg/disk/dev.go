@@ -3,6 +3,7 @@ package disk
 import (
 	"bufio"
 	"io"
+	"os"
 )
 
 // Device is a disk device object
@@ -13,15 +14,44 @@ type Device interface {
 	GetSize() uint64
 }
 
-// // NewDevice creates a new Device to be used as the data store from an APFS instance
-// func NewDevice(name string) (Device, error) {
-// 	if filepath.Ext(name) == ".dmg" {
-// 		return dmg.Open(name)
-// 	}
+type Generic struct {
+	io.ReaderAt
+	io.Closer
 
-// 	if filepath.Ext(name) == ".sparseimage" {
-// 		panic("not implimented yet") // TODO: finish this
-// 	}
+	f    *os.File
+	size int64
+}
 
-// 	return nil, fmt.Errorf("")
-// }
+func Open(in string) (Device, error) {
+	f, err := os.Open(in)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	g := NewGeneric(f)
+	g.f = f
+	g.size = fi.Size()
+	return g, nil
+}
+
+func NewGeneric(r io.ReaderAt) *Generic {
+	return &Generic{
+		ReaderAt: r,
+	}
+}
+
+func (g *Generic) Close() error {
+	return g.f.Close()
+}
+
+func (g *Generic) ReadFile(w *bufio.Writer, off, length int64) error {
+	_, err := io.CopyN(w, g.f, length)
+	return err
+}
+
+func (g *Generic) GetSize() uint64 {
+	return uint64(g.size)
+}
