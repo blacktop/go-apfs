@@ -1,5 +1,7 @@
-# This is an example .goreleaser.yml file with some sane defaults.
-# Make sure to check the documentation at http://goreleaser.com
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=jcroql
+version: 2
+
 before:
   hooks:
     # You may remove this if you don't use go modules.
@@ -32,16 +34,22 @@ builds:
     flags:
       - -trimpath
 archives:
-  - replacements:
-      amd64: x86_64
-    name_template: "apfs_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - name_template: >-
+      apfs_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macOS
+      {{- else if eq .Os "ios" }}iOS
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "all" }}universal
+      {{- else }}{{ .Arch }}{{ end }}
     files:
       - README.md
       - LICENSE
       - completions/*
 
 checksum:
-  name_template: 'checksums.linux.txt'
+  name_template: "checksums.linux.txt"
 
 snapshot:
   name_template: "{{ .Tag }}-next"
@@ -61,7 +69,7 @@ changelog:
 
 nfpms:
   - id: packages
-    homepage:  https://github.com/blacktop/go-apfs
+    homepage: https://github.com/blacktop/go-apfs
     description: |-
       APFS parser written in pure Go.
     maintainer: Blacktop <https://github.com/blacktop>
@@ -79,16 +87,19 @@ nfpms:
         file_info:
           mode: 0644
       - src: ./completions/_zsh
-        dst:  /usr/share/zsh/vendor-completions/_apfs
+        dst: /usr/share/zsh/vendor-completions/_apfs
         file_info:
           mode: 0644
       - src: ./LICENSE
         dst: /usr/share/doc/apfs/copyright
         file_info:
-          mode: 0644
-    replacements:
-      amd64: x86_64
+    file_name_template: >-
+      apfs_{{ .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
     formats:
-    - apk
-    - deb
-    - rpm
+      - apk
+      - deb
+      - rpm

@@ -1,5 +1,7 @@
-# This is an example .goreleaser.yml file with some sane defaults.
-# Make sure to check the documentation at http://goreleaser.com
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=jcroql
+version: 2
+
 before:
   hooks:
     # You may remove this if you don't use go modules.
@@ -18,9 +20,15 @@ builds:
     flags:
       - -trimpath
 archives:
-  - replacements:
-      amd64: x86_64
-    name_template: "apfs_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - name_template: >-
+      apfs_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macOS
+      {{- else if eq .Os "ios" }}iOS
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "all" }}universal
+      {{- else }}{{ .Arch }}{{ end }}
     format_overrides:
       - goos: windows
         format: zip
@@ -30,7 +38,7 @@ archives:
       - completions/*
 
 checksum:
-  name_template: 'checksums.win.txt'
+  name_template: "checksums.win.txt"
 
 snapshot:
   name_template: "{{ .Tag }}-next"
@@ -48,10 +56,11 @@ changelog:
       - Merge pull request
       - Merge branch
 
-scoop:
-  bucket:
-    owner: blacktop
-    name: scoop-bucket
-  homepage:  https://github.com/blacktop/go-apfs
-  description: APFS parser written in pure Go
-  license: Apache 2.0
+scoops:
+  - name: apfs
+    repository:
+      owner: blacktop
+      name: scoop-bucket
+    homepage: https://github.com/blacktop/go-apfs
+    description: APFS parser written in pure Go
+    license: Apache 2.0
