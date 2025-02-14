@@ -653,81 +653,79 @@ func (d *DMG) Load() error {
 	dat := make([]byte, 0, blockSize)
 
 	/* Primary GPT Header */
-	block, err := d.Partition("Primary GPT Header")
-	if err != nil {
-		return fmt.Errorf("failed to load and verify GPT: %w", err)
-	}
-
-	for i, chunk := range block.Chunks {
-		if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
-			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
+	if block, err := d.Partition("Primary GPT Header"); err == nil {
+		for i, chunk := range block.Chunks {
+			if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
+				return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
+			}
 		}
-	}
 
-	var g gpt.GUIDPartitionTable
-	if err := binary.Read(bytes.NewReader(out.Bytes()), binary.LittleEndian, &g.Header); err != nil {
-		return fmt.Errorf("failed to read %T: %w", g.Header, err)
-	}
-
-	if err := g.Header.Verify(); err != nil {
-		return fmt.Errorf("failed to verify GPT header: %w", err)
-	}
-
-	out.Reset()
-
-	/* Primary GPT Table */
-	block, err = d.Partition("Primary GPT Table")
-	if err != nil {
-		return fmt.Errorf("failed to load and verify GPT: %w", err)
-	}
-
-	for i, chunk := range block.Chunks {
-		if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
-			return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
+		var g gpt.GUIDPartitionTable
+		if err := binary.Read(bytes.NewReader(out.Bytes()), binary.LittleEndian, &g.Header); err != nil {
+			return fmt.Errorf("failed to read %T: %w", g.Header, err)
 		}
-	}
 
-	g.Partitions = make([]gpt.Partition, g.Header.EntriesCount)
-	if err := binary.Read(bytes.NewReader(out.Bytes()), binary.LittleEndian, &g.Partitions); err != nil {
-		return fmt.Errorf("failed to load and verify GPT: %w", err)
-	}
+		if err := g.Header.Verify(); err != nil {
+			return fmt.Errorf("failed to verify GPT header: %w", err)
+		}
 
-	// find first APFS partition
-	found := false
-	for _, part := range g.Partitions {
-		switch part.Type.String() {
-		case gpt.None:
-		case gpt.HFSPlus:
-			fallthrough
-		case gpt.Apple_APFS:
-			for i, block := range d.Partitions {
-				if block.udifBlockData.StartSector == part.StartingLBA {
-					found = true
-					d.firstAPFSPartition = i
-					d.maxChunkSize = block.maxChunkSize()
-					// setup sector cache
-					d.cache, err = lru.NewWithEvict(int(block.BuffersNeeded), func(k int, v []byte) {
-						log.Warn("evicted item from DMG read cache (maybe we should increase it)")
-						d.evictCounter++
-					})
-					if err != nil {
-						return fmt.Errorf("failed to initialize DMG read cache: %w", err)
-					}
+		out.Reset()
+
+		/* Primary GPT Table */
+		if block, err := d.Partition("Primary GPT Table"); err == nil {
+			for i, chunk := range block.Chunks {
+				if _, err := chunk.DecompressChunk(d.sr, dat, &out); err != nil {
+					return fmt.Errorf("failed to decompress chunk %d in block %s: %w", i, block.Name, err)
 				}
 			}
-			// Get partition offset and size
-			d.apfsPartitionOffset = part.StartingLBA * sectorSize
-			d.apfsPartitionSize = (part.EndingLBA - part.StartingLBA + 1) * sectorSize
-		default:
-			parts := make([]uint16, len(part.PartitionNameUTF16)/binary.Size(uint16(0)))
-			if err := binary.Read(bytes.NewReader(part.PartitionNameUTF16[:]), binary.LittleEndian, &parts); err != nil {
-				return fmt.Errorf("failed to read partition name: %w", err)
+
+			g.Partitions = make([]gpt.Partition, g.Header.EntriesCount)
+			if err := binary.Read(bytes.NewReader(out.Bytes()), binary.LittleEndian, &g.Partitions); err != nil {
+				return fmt.Errorf("failed to load and verify GPT: %w", err)
 			}
-			log.Debugf("skipping partition: %s", string(utf16.Decode(parts)))
+
+			// find first APFS partition
+			found := false
+			for _, part := range g.Partitions {
+				switch part.Type.String() {
+				case gpt.None:
+				case gpt.HFSPlus:
+					fallthrough
+				case gpt.Apple_APFS:
+					for i, block := range d.Partitions {
+						if block.udifBlockData.StartSector == part.StartingLBA {
+							found = true
+							d.firstAPFSPartition = i
+							d.maxChunkSize = block.maxChunkSize()
+							// setup sector cache
+							d.cache, err = lru.NewWithEvict(int(block.BuffersNeeded), func(k int, v []byte) {
+								log.Warn("evicted item from DMG read cache (maybe we should increase it)")
+								d.evictCounter++
+							})
+							if err != nil {
+								return fmt.Errorf("failed to initialize DMG read cache: %w", err)
+							}
+						}
+					}
+					// Get partition offset and size
+					d.apfsPartitionOffset = part.StartingLBA * sectorSize
+					d.apfsPartitionSize = (part.EndingLBA - part.StartingLBA + 1) * sectorSize
+				default:
+					parts := make([]uint16, len(part.PartitionNameUTF16)/binary.Size(uint16(0)))
+					if err := binary.Read(bytes.NewReader(part.PartitionNameUTF16[:]), binary.LittleEndian, &parts); err != nil {
+						return fmt.Errorf("failed to read partition name: %w", err)
+					}
+					log.Debugf("skipping partition: %s", string(utf16.Decode(parts)))
+				}
+			}
+			if !found {
+				return fmt.Errorf("failed to find Apple_APFS partition in DMG")
+			}
+		} else {
+			return fmt.Errorf("failed to load and verify GPT: %w", err)
 		}
-	}
-	if !found {
-		return fmt.Errorf("failed to find Apple_APFS partition in DMG")
+	} else {
+		log.Debugf("failed to load and verify GPT: %v", err)
 	}
 
 	return nil
