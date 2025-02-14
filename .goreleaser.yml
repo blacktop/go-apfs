@@ -25,14 +25,6 @@ builds:
     binary: apfs
     env:
       - CGO_ENABLED=1
-      - >-
-        {{- if eq .Arch "amd64" }}CC=zig cc -target x86_64-macos-none
-        {{- else if eq .Arch "arm64" }}CC=zig cc -target aarch64-macos-none
-        {{- end }}
-      - >-
-        {{- if eq .Arch "amd64" }}CXX=zig cc -target x86_64-macos-none
-        {{- else if eq .Arch "arm64" }}CXX=zig cc -target aarch64-macos-none
-        {{- end }}
     goos:
       - darwin
     goarch:
@@ -43,7 +35,7 @@ builds:
       - -trimpath
     ldflags: -s -w -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppVersion={{.Version}} -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppBuildCommit={{.Commit}}
   - id: linux
-    main: ./cmd/apfs
+    dir: cmd/apfs
     binary: apfs
     env:
       - CGO_ENABLED=1
@@ -64,8 +56,8 @@ builds:
     flags:
       - -trimpath
     ldflags: -s -w -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppVersion={{.Version}} -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppBuildCommit={{.Commit}}
-  - id: windows_build
-    main: ./cmd/apfs
+  - id: windows
+    dir: cmd/apfs
     binary: apfs
     env:
       - CGO_ENABLED=1
@@ -89,7 +81,6 @@ builds:
     flags:
       - -trimpath
     ldflags: -s -w -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppVersion={{.Version}} -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppBuildCommit={{.Commit}}
-
 universal_binaries:
   - id: darwin
     replace: true
@@ -115,7 +106,7 @@ archives:
       - LICENSE
       - completions/*
 checksum:
-  name_template: "checksums.darwin.txt"
+  name_template: "checksums.txt"
   disable: false
 signs:
   - artifacts: checksum
