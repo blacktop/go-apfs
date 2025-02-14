@@ -25,6 +25,14 @@ builds:
     binary: apfs
     env:
       - CGO_ENABLED=1
+      - >-
+        {{- if eq .Arch "amd64" }}CC=zig cc -target x86_64-macos-none
+        {{- else if eq .Arch "arm64" }}CC=zig cc -target aarch64-macos-none
+        {{- end }}
+      - >-
+        {{- if eq .Arch "amd64" }}CXX=zig cc -target x86_64-macos-none
+        {{- else if eq .Arch "arm64" }}CXX=zig cc -target aarch64-macos-none
+        {{- end }}
     goos:
       - darwin
     goarch:
@@ -34,6 +42,54 @@ builds:
     flags:
       - -trimpath
     ldflags: -s -w -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppVersion={{.Version}} -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppBuildCommit={{.Commit}}
+  - id: linux
+    main: ./cmd/apfs
+    binary: apfs
+    env:
+      - CGO_ENABLED=1
+      - >-
+        {{- if eq .Arch "amd64" }}CC=zig cc -target x86_64-linux-musl
+        {{- else if eq .Arch "arm64" }}CC=zig cc -target aarch64-linux-musl
+        {{- end }}
+      - >-
+        {{- if eq .Arch "amd64" }}CXX=zig cc -target x86_64-linux-musl
+        {{- else if eq .Arch "arm64" }}CXX=zig cc -target aarch64-linux-musl
+        {{- end }}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags: -s -w -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppVersion={{.Version}} -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppBuildCommit={{.Commit}}
+  - id: windows_build
+    main: ./cmd/apfs
+    binary: apfs
+    env:
+      - CGO_ENABLED=1
+      - >-
+        {{- if eq .Arch "386" }}CC=zig cc -target i386-windows-gnu
+        {{- else if eq .Arch "amd64" }}CC=zig cc -target x86_64-windows-gnu
+        {{- else if eq .Arch "arm64" }}CC=zig cc -target aarch64-windows-gnu
+        {{- end }}
+      - >-
+        {{- if eq .Arch "386" }}CXX=zig cc -target i386-windows-gnu
+        {{- else if eq .Arch "amd64" }}CXX=zig cc -target x86_64-windows-gnu
+        {{- else if eq .Arch "arm64" }}CXX=zig cc -target aarch64-windows-gnu
+        {{- end }}
+    goos:
+      - windows
+    goarch:
+      # - "386"
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags: -s -w -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppVersion={{.Version}} -X github.com/blacktop/go-apfs/cmd/apfs/cmd.AppBuildCommit={{.Commit}}
+
 universal_binaries:
   - id: darwin
     replace: true
@@ -78,6 +134,50 @@ brews:
       fish_completion.install "completions/_fish" => "apfs.fish"
     test: |
       system "#{bin}/apfs --version"
+nfpms:
+  - id: packages
+    homepage: https://github.com/blacktop/go-apfs
+    description: |-
+      APFS parser written in pure Go.
+    maintainer: Blacktop <https://github.com/blacktop>
+    license: MIT
+    vendor: Blacktop
+    bindir: /usr/bin
+    section: utils
+    contents:
+      - src: ./completions/_bash
+        dst: /usr/share/bash-completion/completions/apfs
+        file_info:
+          mode: 0644
+      - src: ./completions/_fish
+        dst: /usr/share/fish/completions/apfs.fish
+        file_info:
+          mode: 0644
+      - src: ./completions/_zsh
+        dst: /usr/share/zsh/vendor-completions/_apfs
+        file_info:
+          mode: 0644
+      - src: ./LICENSE
+        dst: /usr/share/doc/apfs/copyright
+        file_info:
+    file_name_template: >-
+      apfs_{{ .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    formats:
+      - apk
+      - deb
+      - rpm
+scoops:
+  - name: apfs
+    repository:
+      owner: blacktop
+      name: scoop-bucket
+    homepage: https://github.com/blacktop/go-apfs
+    description: APFS parser written in pure Go
+    license: Apache 2.0
 changelog:
   sort: asc
   use: github
@@ -117,3 +217,4 @@ release:
     - Read the [documentation](https://blacktop.github.io/ipsw)
     - Follow us on [Twitter](https://twitter.com/blacktop__)
     - Follow us on [Mastodon](https://mastodon.social/@blacktop)
+    - Follow us on [Bluesky](https://bsky.app/profile/blacktop.bsky.social)

@@ -1,21 +1,15 @@
 name: Go
 on:
   push:
-    # branches:
-    #   - main
     tags:
-      - v1.*.*
-  pull_request:
-    branches:
-      - main
+      - v*.*.*
+
+permissions:
+  contents: write
 
 jobs:
   goreleaser:
-    strategy:
-      matrix:
-        platform: [ubuntu-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: ubuntu-latest
     steps:
       -
         name: Checkout
@@ -26,12 +20,6 @@ jobs:
         name: Set up Go
         uses: actions/setup-go@v5
       -
-        name: Build Dependencies (Linux)
-        if: matrix.platform == 'ubuntu-latest'
-        run: |
-          sudo apt-get update && sudo apt-get install gcc-aarch64-linux-gnu
-      -
-        if: matrix.platform == 'ubuntu-latest'
         name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -39,53 +27,9 @@ jobs:
           distribution: goreleaser
           # 'latest', 'nightly', or a semver
           version: '~> v2'
-          args: release --clean -f .goreleaser.linux.yml
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # - name: What is SDK (macOS)
-      #   if: matrix.platform == 'macos-latest'
-      #   run: |
-      #     xcrun --sdk macosx --show-sdk-path
-      # -
-      #   if: matrix.platform == 'macos-latest'
-      #   name: Run GoReleaser
-      #   uses: goreleaser/goreleaser-action@v6
-      #   with:
-      #     distribution: goreleaser
-      #     version: latest
-      #     args: release --rm-dist -f hack/goreleaser/darwin.yml
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      -
-        if: matrix.platform == 'windows-latest'
-        name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          # either 'goreleaser' (default) or 'goreleaser-pro'
-          distribution: goreleaser
-          # 'latest', 'nightly', or a semver
-          version: '~> v2'
-          args: release --clean -f .goreleaser.windows.yml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_SCOOP }}
-      -
-        if: matrix.platform == 'ubuntu-latest'
-        name: Upload assets (Linux)
-        uses: actions/upload-artifact@v4
-        with:
-          name: apfs_linux
-          path: dist/*
-      # -
-      #   if: matrix.platform == 'macos-latest'
-      #   name: Upload assets
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: apfs_macos
-      #     path: dist/*
-      -
-        if: matrix.platform == 'windows-latest'
-        name: Upload assets (Windows)
-        uses: actions/upload-artifact@v4
-        with:
-          name: apfs_windows
-          path: dist/*
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
+          # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
