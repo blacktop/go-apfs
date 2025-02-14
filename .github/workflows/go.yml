@@ -20,6 +20,9 @@ jobs:
         name: Set up Go
         uses: actions/setup-go@v5
       -
+        name: Set up Zig
+        uses: mlugg/setup-zig@v1
+      -
         name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
