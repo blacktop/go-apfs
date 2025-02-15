@@ -653,6 +653,7 @@ type FileRecord struct {
 	FileInfo HFSPlusCatalogFile
 	FileData FileData
 
+	path    string
 	blkSize uint32
 	r       *io.ReaderAt
 }
@@ -665,6 +666,10 @@ func (fr *FileRecord) String() string {
 		fr.FileInfo.RecordType,
 		fr.FileInfo.CreateDate,
 	)
+}
+
+func (fr *FileRecord) Path() string {
+	return fr.path
 }
 
 func (fr *FileRecord) Unmarshal(r io.Reader) error {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/apex/log"
@@ -82,15 +83,15 @@ func (fs *HFSPlus) Files() ([]*FileRecord, error) {
 		return nil, fmt.Errorf("catalog B-tree not initialized")
 	}
 
-	// Recursively traverse the B-tree
-	if err := fs.listFilesInNode(fs.catalogBTree.Root, HFSRootFolderID, &files); err != nil {
+	// Recursively traverse the B-tree starting at root folder with empty path.
+	if err := fs.listFilesInNode(fs.catalogBTree.Root, HFSRootFolderID, "", &files); err != nil {
 		return nil, fmt.Errorf("failed to list files: %v", err)
 	}
 
 	return files, nil
 }
 
-func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, files *[]*FileRecord) error {
+func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, currentPath string, files *[]*FileRecord) error {
 	// Handle different node types
 	switch node.Descriptor.Kind {
 	case BTIndexNodeKind:
@@ -109,7 +110,7 @@ func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, files *
 					}
 
 					// Recursively process child node
-					if err := fs.listFilesInNode(childNode, folderID, files); err != nil {
+					if err := fs.listFilesInNode(childNode, folderID, currentPath, files); err != nil {
 						return err
 					}
 				}
@@ -117,15 +118,38 @@ func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, files *
 		}
 
 	case BTLeafNodeKind:
-		// For leaf nodes, collect file records that match our folder ID
+		// For leaf nodes, process file and folder records for the current folder.
 		for _, record := range node.Records {
 			switch r := record.(type) {
 			case *FileRecord:
-				// if r.Key.ParentID == folderID {
-				r.r = &fs.device
-				r.blkSize = fs.volumeHdr.BlockSize
-				*files = append(*files, r)
-				// }
+				if r.Key.ParentID == folderID {
+					fileName := r.Key.NodeName.String()
+					var filePath string
+					if currentPath == "" {
+						filePath = "/" + fileName
+					} else {
+						filePath = filepath.Join(currentPath, fileName)
+					}
+					r.path = filePath
+					r.r = &fs.device
+					r.blkSize = fs.volumeHdr.BlockSize
+					*files = append(*files, r)
+				}
+			case *FolderRecord:
+				if r.Key.ParentID == folderID {
+					folderName := r.Key.NodeName.String()
+					var newPath string
+					if currentPath == "" {
+						newPath = "/" + folderName
+					} else {
+						newPath = filepath.Join(currentPath, folderName)
+					}
+					// Recursively process the subfolder's own files.
+					subFolderID := r.FolderInfo.FolderID
+					if err := fs.listFilesInNode(fs.catalogBTree.Root, subFolderID, newPath, files); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
