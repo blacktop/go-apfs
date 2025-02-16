@@ -1,0 +1,57 @@
+//------------------------------------------------
+//--- 010 Editor v10.0.1 Binary Template
+//
+//      File: DMG.bt
+//   Authors: blacktop
+//   Version: 1.0
+//   Purpose: DMG file template for analysis
+//  Category: Drives
+// File Mask: 
+//  ID Bytes: 65 6E 63 72 63 64 73 61
+//   History: 
+//   1.0   2025-02-17 Inital version
+//------------------------------------------------
+
+typedef char   SInt8;
+typedef uchar  UInt8;
+typedef int16  SInt16;
+typedef uint16 UInt16;
+typedef int32  SInt32;
+typedef uint32 UInt32;
+typedef int64  SInt64;
+typedef uint64 UInt64;
+
+// DMG encrypted header
+struct DMG_EncryptedHeader
+{
+    UInt8                  Magic[8];
+    UInt32                Version;
+    UInt32                EncIvSize;
+    UInt32                Unknown1;
+    UInt32                Unknown2;
+    UInt32                DataEncKeyBits;
+    UInt32                Unknown3;
+    UInt32                HmacKeyBits;
+    UInt8                UUID[16];
+    UInt32                Blocksize;
+    UInt64                Datasize;
+    UInt64                Dataoffset;
+    UInt8                Unknown4[24];
+    UInt32                KdfAlgorithm;
+    UInt32                KdfPrngAlgorithm;
+    UInt32                KdfIterationCount;
+    UInt32                KdfSaltLen;
+    UInt8                KdfSalt[32];
+    UInt32                BlobEncIvSize;
+    UInt8                BlobEncIv[32];
+    UInt32                BlobEncKeyBits;
+    UInt32                BlobEncAlgorithm;
+    UInt32                BlobEncPadding;
+    UInt32                BlobEncMode;
+    UInt32                EncryptedKeyblobSize;
+    UInt8                EncryptedKeyblob1[32];
+    UInt8                EncryptedKeyblob2[32];
+};
+
+BigEndian();
+DMG_EncryptedHeader header;

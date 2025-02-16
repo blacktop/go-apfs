@@ -18,6 +18,13 @@ build: ## Build apfs locally
 	@echo " > Building locally"
 	@cd cmd/apfs; go build -o ../../apfs.${CUR_VERSION} main.go
 
+.PHONY: test-dmg
+test-dmgs: ## Create a test DMGs
+	@echo " > Creating test DMGs"
+	@hdiutil create -volname TEST -srcfolder README.md -ov -format UDZO testdata/test.dmg
+	# @echo -n "password" | hdiutil create -volname SECURE -srcfolder README.md -ov -format UDZO -encryption -stdinpass -fs apfs testdata/secure.dmg
+	@hdiutil create -volname SECURE -srcfolder README.md -ov -format UDZO -encryption -stdinpass -fs apfs testdata/secure.dmg
+
 .PHONY: test
 test: build ## Test apfs (list root dir on APFS_DMG)
 	ifndef APFS_DMG
@@ -52,6 +59,7 @@ clean: ## Clean up artifacts
 	@echo " > Cleaning"
 	rm -rf dist
 	rm apfs.v* || true
+	rm testdata/*.dmg || true
 
 # Absolutely awesome: http://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 help:

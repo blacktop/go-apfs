@@ -1,6 +1,6 @@
 module github.com/blacktop/go-apfs
 
-go 1.23
+go 1.24
 
 require (
 	github.com/apex/log v1.9.0

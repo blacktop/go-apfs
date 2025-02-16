@@ -6,6 +6,7 @@ import (
 	"compress/bzip2"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,10 +31,13 @@ const (
 	blockSize  = 0xc8000
 )
 
+var ErrEncrypted = errors.New("DMG is encrypted")
+
 var diskReadColor = color.New(color.Faint, color.FgWhite).SprintfFunc()
 
 // Config is the DMG config
 type Config struct {
+	Password     string
 	DisableCache bool
 }
 
@@ -492,6 +496,14 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 
 // Open opens the named file using os.Open and prepares it for use as a dmg.
 func Open(name string, c *Config) (*DMG, error) {
+	if len(c.Password) > 0 { // decrypt dmg if password is provided
+		var err error
+		name, err = DecryptDMG(name, c.Password)
+		if err != nil {
+			return nil, err
+		}
+		defer os.Remove(name) // remove decrypted dmg after use
+	}
 	f, err := os.Open(name)
 	if err != nil {
 		return nil, err
@@ -522,6 +534,15 @@ func NewDMG(sr *io.SectionReader) (*DMG, error) {
 
 	d := new(DMG)
 	d.sr = sr
+
+	var encHeader EncryptionHeader
+	if err := binary.Read(d.sr, binary.BigEndian, &encHeader); err != nil {
+		return nil, fmt.Errorf("failed to read DMG encrypted header: %v", err)
+	}
+
+	if string(encHeader.Magic[:]) == EncryptedMagic {
+		return nil, ErrEncrypted
+	}
 
 	if _, err := d.sr.Seek(int64(-binary.Size(UDIFResourceFile{})), io.SeekEnd); err != nil {
 		return nil, fmt.Errorf("failed to seek to DMG footer: %v", err)
