@@ -1,13 +1,15 @@
 module github.com/blacktop/go-apfs/cmd/apfs
 
-go 1.23
+go 1.24
+
+toolchain go1.24.0
 
 require (
 	github.com/apex/log v1.9.0
-	github.com/blacktop/go-apfs v1.0.18
+	github.com/blacktop/go-apfs v1.0.24
 	github.com/c-bata/go-prompt v0.2.6
 	github.com/fatih/color v1.18.0
-	github.com/spf13/cobra v1.8.1
+	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.19.0
 )
 
