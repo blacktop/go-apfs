@@ -8,6 +8,7 @@ import (
 	"crypto/pbkdf2"
 	"crypto/sha1"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -49,7 +50,8 @@ type EncryptionHeader struct {
 	EncryptedKeyblob2    [32]byte
 }
 
-func DecryptDMG(path string, password string) (string, error) {
+// DecryptDMGWithPassword decrypts a DMG file using a password.
+func DecryptDMGWithPassword(path string, password string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -88,7 +90,7 @@ func DecryptDMG(path string, password string) (string, error) {
 	// derive key using PBKDF2 with SHA1
 	dk, err := pbkdf2.Key(sha1.New, password, hdr.KdfSalt[:20], int(hdr.KdfIterationCount), 24)
 	if err != nil {
-		return "", fmt.Errorf("failed to derive key: %v", err)
+		return "", fmt.Errorf("failed to derive key: %w", err)
 	}
 
 	// Decrypt the keyblob using Triple DES (DES_EDE3_CBC).
@@ -119,7 +121,57 @@ func DecryptDMG(path string, password string) (string, error) {
 	aesKey := keyblob[:aesKeySize]
 	hmacKey := keyblob[aesKeySize : aesKeySize+hmacKeySize]
 
-	// Create block cipher based on AES key size.
+	return decryptDMGWithKeys(path, aesKey, hmacKey)
+}
+
+// DecryptDMGWithKey decrypts a DMG file using a hex-encoded key string.
+// The key string should be 72 characters: 32 for AES key (16 bytes) + 40 for HMAC key (20 bytes).
+func DecryptDMGWithKey(path string, keyString string) (string, error) {
+	if len(keyString) != 72 {
+		return "", fmt.Errorf("invalid key length: expected 72 hex characters (16 bytes AES + 20 bytes HMAC)")
+	}
+
+	aesKey, err := hex.DecodeString(keyString[:32])
+	if err != nil {
+		return "", fmt.Errorf("invalid AES key format: %w", err)
+	}
+
+	hmacKey, err := hex.DecodeString(keyString[32:])
+	if err != nil {
+		return "", fmt.Errorf("invalid HMAC key format: %w", err)
+	}
+
+	return decryptDMGWithKeys(path, aesKey, hmacKey)
+}
+
+// decryptDMGWithKeys decrypts a DMG file using the provided AES and HMAC keys directly.
+func decryptDMGWithKeys(path string, aesKey []byte, hmacKey []byte) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var hdr EncryptionHeader
+	if err := binary.Read(f, binary.BigEndian, &hdr); err != nil {
+		return "", fmt.Errorf("failed to read encryption header: %w", err)
+	}
+
+	if string(hdr.Magic[:]) != EncryptedMagic {
+		return "", ErrNotEncrypted
+	}
+
+	if hdr.Version != 2 {
+		return "", fmt.Errorf("unsupported encryption version: %d", hdr.Version)
+	}
+
+	tmp, err := os.CreateTemp("", "dmg")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp DMG file: %w", err)
+	}
+	defer tmp.Close()
+
+	// Create block cipher based on AES key size
 	var blk cipher.Block
 	switch hdr.DataEncKeyBits {
 	case 128, 256:
@@ -137,7 +189,7 @@ func DecryptDMG(path string, password string) (string, error) {
 
 	buf := make([]byte, hdr.Blocksize)
 	ivbuf := make([]byte, 4)
-	iv = make([]byte, 16)
+	iv := make([]byte, 16)
 	plaintext := make([]byte, int(hdr.Blocksize)+blk.BlockSize())
 	bytesRead := uint64(0)
 

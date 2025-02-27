@@ -119,7 +119,7 @@ func CreateChecksum(data []byte) uint64 {
 
 	modValue := uint64(2<<31 - 1)
 
-	for i := 0; i < len(data)/4; i++ {
+	for i := range len(data) / 4 {
 		d := binary.LittleEndian.Uint32(data[i*4 : (i+1)*4])
 		sum1 = (sum1 + uint64(d)) % modValue
 		sum2 = (sum2 + sum1) % modValue
@@ -136,7 +136,7 @@ func VerifyChecksum(data []byte) bool {
 
 	modValue := uint64(2<<31 - 1)
 
-	for i := 0; i < len(data)/4; i++ {
+	for i := range len(data) / 4 {
 		d := binary.LittleEndian.Uint32(data[i*4 : (i+1)*4])
 		sum1 = (sum1 + uint64(d)) % modValue
 		sum2 = (sum2 + sum1) % modValue

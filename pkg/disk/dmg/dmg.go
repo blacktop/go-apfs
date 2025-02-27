@@ -38,6 +38,7 @@ var diskReadColor = color.New(color.Faint, color.FgWhite).SprintfFunc()
 // Config is the DMG config
 type Config struct {
 	Password     string
+	Key          string
 	DisableCache bool
 }
 
@@ -57,6 +58,8 @@ type DMG struct {
 	evictCounter uint64
 
 	config Config
+
+	decrypted string
 
 	sr     *io.SectionReader
 	closer io.Closer
@@ -496,17 +499,35 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 
 // Open opens the named file using os.Open and prepares it for use as a dmg.
 func Open(name string, c *Config) (*DMG, error) {
-	if len(c.Password) > 0 { // decrypt dmg if password is provided
+	var decrypted string
+	if len(c.Password) > 0 || len(c.Key) > 0 {
+		if len(c.Password) > 0 {
+			var err error
+			decrypted, err = DecryptDMGWithPassword(name, c.Password)
+			if err != nil {
+				return nil, err
+			}
+		} else if len(c.Key) > 0 {
+			var err error
+			decrypted, err = DecryptDMGWithKey(name, c.Key)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	var f *os.File
+	if len(decrypted) > 0 {
 		var err error
-		name, err = DecryptDMG(name, c.Password)
+		f, err = os.Open(decrypted)
 		if err != nil {
 			return nil, err
 		}
-		defer os.Remove(name) // remove decrypted dmg after use
-	}
-	f, err := os.Open(name)
-	if err != nil {
-		return nil, err
+	} else {
+		var err error
+		f, err = os.Open(name)
+		if err != nil {
+			return nil, err
+		}
 	}
 	fi, err := f.Stat()
 	if err != nil {
@@ -518,6 +539,9 @@ func Open(name string, c *Config) (*DMG, error) {
 		f.Close()
 		return nil, err
 	}
+	if len(decrypted) > 0 {
+		ff.decrypted = decrypted
+	}
 	if c != nil {
 		ff.config = *c
 	}
@@ -526,6 +550,27 @@ func Open(name string, c *Config) (*DMG, error) {
 	}
 	ff.closer = f
 	return ff, nil
+}
+
+// Close closes the DMG.
+// If the DMG was created using NewFile directly instead of Open,
+// Close has no effect.
+func (d *DMG) Close() error {
+	var err error
+	if d.closer != nil {
+		err = d.closer.Close()
+		d.closer = nil
+	}
+	if d.decrypted != "" {
+		// remove temp decrypted file
+		err = os.Remove(d.decrypted)
+		d.decrypted = ""
+	}
+	return err
+}
+
+func (d *DMG) DecryptedTemp() string {
+	return d.decrypted
 }
 
 // NewDMG creates a new DMG for accessing a dmg in an underlying reader.
@@ -638,18 +683,6 @@ func NewDMG(sr *io.SectionReader) (*DMG, error) {
 	}
 
 	return d, nil
-}
-
-// Close closes the DMG.
-// If the DMG was created using NewFile directly instead of Open,
-// Close has no effect.
-func (d *DMG) Close() error {
-	var err error
-	if d.closer != nil {
-		err = d.closer.Close()
-		d.closer = nil
-	}
-	return err
 }
 
 // GetSize returns the size of the DMG data
