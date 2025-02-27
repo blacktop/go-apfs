@@ -18,6 +18,7 @@ build: ## Build apfs locally
 	@echo " > Building locally"
 	@cd cmd/apfs; go build -o ../../apfs.${CUR_VERSION} main.go
 
+SHELL := /bin/bash
 .PHONY: test-dmgs
 test-dmgs: ## Create a test DMGs
 	@echo " > Creating test DMGs"
