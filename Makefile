@@ -18,11 +18,12 @@ build: ## Build apfs locally
 	@echo " > Building locally"
 	@cd cmd/apfs; go build -o ../../apfs.${CUR_VERSION} main.go
 
-.PHONY: test-dmg
+.PHONY: test-dmgs
 test-dmgs: ## Create a test DMGs
 	@echo " > Creating test DMGs"
 	@hdiutil create -volname TEST -srcfolder README.md -ov -format UDZO testdata/test.dmg
 	@echo -n "password" | hdiutil create -volname SECURE -srcfolder README.md -ov -format UDZO -encryption -stdinpass -fs apfs testdata/secure.dmg
+
 .PHONY: test
 test: build ## Test apfs (list root dir on APFS_DMG)
 	ifndef APFS_DMG
