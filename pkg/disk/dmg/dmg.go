@@ -22,6 +22,7 @@ import (
 
 	lzfse "github.com/blacktop/lzfse-cgo"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/ulikunitz/xz/lzma"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 )
@@ -359,7 +360,24 @@ func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
 			total += n
 			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		case COMPRESSS_LZMA:
-			return fmt.Errorf("%s is currently unsupported", chunk.Type)
+			buff = buff[:chunk.CompressedLength]
+			if _, err := b.sr.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
+				return err
+			}
+			lzmaReader, err := lzma.NewReader(bytes.NewReader(buff))
+			if err != nil {
+				return fmt.Errorf("failed to create LZMA reader: %w", err)
+			}
+			var decompressed bytes.Buffer
+			if _, err := decompressed.ReadFrom(lzmaReader); err != nil {
+				return fmt.Errorf("failed to decompress LZMA data: %w", err)
+			}
+			n, err = w.Write(decompressed.Bytes())
+			if err != nil {
+				return err
+			}
+			total += n
+			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		case LAST_BLOCK:
 			if err := w.Flush(); err != nil {
 				return err
@@ -383,6 +401,11 @@ func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
 var _ io.ReaderAt = (*Partition)(nil)
 
 func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
+	// Adjust offset to absolute file offset by adding partition start
+	// Chunks use absolute file offsets, but ReadAt receives partition-relative offsets
+	partitionStart := int64(b.StartSector) * 512
+	off += partitionStart
+
 	for _, chk := range b.Chunks {
 		lenP := int64(len(p))
 		if lenP == 0 {
@@ -390,7 +413,14 @@ func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
 		}
 
 		diff := off - int64(chk.DiskOffset)
+
+		// Skip chunks that end before our offset
 		if diff >= int64(chk.DiskLength) {
+			continue
+		}
+
+		// Skip chunks that start after our offset (diff < 0 means chunk is ahead)
+		if diff < 0 {
 			continue
 		}
 
@@ -401,6 +431,9 @@ func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
 		data := buf.Bytes()
 
 		size := int64(len(data)) - diff
+		if size <= 0 {
+			continue
+		}
 		if lenP < size {
 			size = lenP
 		}
@@ -488,7 +521,19 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		}
 		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESSS_LZMA:
-		return n, fmt.Errorf("COMPRESSS_LZMA is currently unsupported")
+		in = in[:chunk.CompressedLength]
+		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
+			return
+		}
+		lzmaReader, err := lzma.NewReader(bytes.NewReader(in))
+		if err != nil {
+			return -1, fmt.Errorf("failed to create LZMA reader: %w", err)
+		}
+		if nn, err = out.ReadFrom(lzmaReader); err != nil {
+			return -1, fmt.Errorf("failed to write COMPRESSS_LZMA data: %w", err)
+		}
+		n = int(nn)
+		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case LAST_BLOCK:
 	default:
 		return n, fmt.Errorf("chuck has unsupported compression type: %#x", chunk.Type)
