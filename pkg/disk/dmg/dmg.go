@@ -69,6 +69,13 @@ var (
 			return &b
 		},
 	}
+
+	// Pool for bytes.Reader used as zlib input
+	bytesReaderPool = sync.Pool{
+		New: func() any {
+			return bytes.NewReader(nil)
+		},
+	}
 )
 
 // getInputBuffer returns a buffer from the appropriate pool based on size
@@ -642,13 +649,21 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
-		zr, err := zlib.NewReader(bytes.NewReader(in))
+		// Get bytes.Reader from pool and reset it
+		br := bytesReaderPool.Get().(*bytes.Reader)
+		br.Reset(in)
+		zr, err := zlib.NewReader(br)
 		if err != nil {
+			bytesReaderPool.Put(br)
 			return -1, fmt.Errorf("failed to create zlib reader")
 		}
 		if nn, err = out.ReadFrom(zr); err != nil {
+			zr.Close()
+			bytesReaderPool.Put(br)
 			return -1, fmt.Errorf("failed to write COMPRESS_ZLIB data")
 		}
+		zr.Close()
+		bytesReaderPool.Put(br)
 		n = int(nn)
 		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESSS_BZ2:
