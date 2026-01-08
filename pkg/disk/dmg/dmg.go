@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"unicode/utf16"
 
 	"github.com/apex/log"
@@ -26,6 +27,74 @@ import (
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 )
+
+// Buffer pools to reduce allocations
+var (
+	// Pool for bytes.Buffer used in decompression output
+	bufferPool = sync.Pool{
+		New: func() any {
+			return new(bytes.Buffer)
+		},
+	}
+
+	// Pool for input byte slices (compressed data) - keyed by size buckets
+	// Common chunk sizes: 64KB, 128KB, 256KB, 512KB, 1MB
+	inputBufferPool64K = sync.Pool{
+		New: func() any {
+			b := make([]byte, 64*1024)
+			return &b
+		},
+	}
+	inputBufferPool128K = sync.Pool{
+		New: func() any {
+			b := make([]byte, 128*1024)
+			return &b
+		},
+	}
+	inputBufferPool256K = sync.Pool{
+		New: func() any {
+			b := make([]byte, 256*1024)
+			return &b
+		},
+	}
+	inputBufferPool512K = sync.Pool{
+		New: func() any {
+			b := make([]byte, 512*1024)
+			return &b
+		},
+	}
+	inputBufferPool1M = sync.Pool{
+		New: func() any {
+			b := make([]byte, 1024*1024)
+			return &b
+		},
+	}
+)
+
+// getInputBuffer returns a buffer from the appropriate pool based on size
+func getInputBuffer(size uint64) (*[]byte, *sync.Pool) {
+	switch {
+	case size <= 64*1024:
+		buf := inputBufferPool64K.Get().(*[]byte)
+		return buf, &inputBufferPool64K
+	case size <= 128*1024:
+		buf := inputBufferPool128K.Get().(*[]byte)
+		return buf, &inputBufferPool128K
+	case size <= 256*1024:
+		buf := inputBufferPool256K.Get().(*[]byte)
+		return buf, &inputBufferPool256K
+	case size <= 512*1024:
+		buf := inputBufferPool512K.Get().(*[]byte)
+		return buf, &inputBufferPool512K
+	case size <= 1024*1024:
+		buf := inputBufferPool1M.Get().(*[]byte)
+		return buf, &inputBufferPool1M
+	default:
+		// For larger sizes, just allocate
+		buf := make([]byte, size)
+		return &buf, nil
+	}
+}
 
 const (
 	sectorSize = 0x200
@@ -473,16 +542,39 @@ func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
 		if cached, found := b.cache.Get(chunkIdx); found {
 			data = cached
 		} else {
-			var buf bytes.Buffer
-			inBuf := make([]byte, chk.CompressedLength)
-			if _, err = chk.DecompressChunk(b.sr, inBuf, &buf); err != nil {
+			// Get output buffer from pool
+			buf := bufferPool.Get().(*bytes.Buffer)
+			buf.Reset()
+			// Pre-size buffer to expected decompressed size to avoid growth
+			if int64(buf.Cap()) < int64(chk.DiskLength) {
+				buf.Grow(int(chk.DiskLength))
+			}
+
+			// Get input buffer from pool
+			inBufPtr, inPool := getInputBuffer(chk.CompressedLength)
+			inBuf := (*inBufPtr)[:chk.CompressedLength]
+
+			if _, err = chk.DecompressChunk(b.sr, inBuf, buf); err != nil {
+				if inPool != nil {
+					inPool.Put(inBufPtr)
+				}
+				bufferPool.Put(buf)
 				return n, err
 			}
-			data = buf.Bytes()
-			// Store a copy in cache (buf.Bytes() may be reused)
-			cacheCopy := make([]byte, len(data))
-			copy(cacheCopy, data)
+
+			// Return input buffer to pool
+			if inPool != nil {
+				inPool.Put(inBufPtr)
+			}
+
+			// Store a copy in cache
+			cacheCopy := make([]byte, buf.Len())
+			copy(cacheCopy, buf.Bytes())
 			b.cache.Add(chunkIdx, cacheCopy)
+			data = cacheCopy
+
+			// Return output buffer to pool
+			bufferPool.Put(buf)
 		}
 
 		size := int64(len(data)) - diff
