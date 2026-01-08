@@ -188,7 +188,8 @@ type Partition struct {
 	Name   string
 	Chunks []udifBlockChunk
 
-	sr *io.SectionReader
+	sr    *io.SectionReader
+	cache *lru.Cache[int, []byte] // LRU cache for decompressed chunks
 }
 
 type udifBlockChunkType uint32
@@ -400,48 +401,105 @@ func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
 
 var _ io.ReaderAt = (*Partition)(nil)
 
+// initCache initializes the LRU cache for decompressed chunks if not already initialized
+func (b *Partition) initCache() error {
+	if b.cache != nil {
+		return nil
+	}
+	// Use BuffersNeeded from the partition metadata, default to 256 if not set
+	cacheSize := int(b.BuffersNeeded)
+	if cacheSize == 0 {
+		cacheSize = 256
+	}
+	var err error
+	b.cache, err = lru.New[int, []byte](cacheSize)
+	return err
+}
+
+// findChunkIndex uses binary search to find the chunk containing the given offset
+func (b *Partition) findChunkIndex(off int64) int {
+	beg := 0
+	end := len(b.Chunks) - 1
+
+	for beg <= end {
+		mid := (beg + end) / 2
+		chk := b.Chunks[mid]
+		if off >= int64(chk.DiskOffset) && off < int64(chk.DiskOffset+chk.DiskLength) {
+			return mid
+		} else if off < int64(chk.DiskOffset) {
+			end = mid - 1
+		} else {
+			beg = mid + 1
+		}
+	}
+	return -1
+}
+
 func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
+	// Initialize cache on first use
+	if err := b.initCache(); err != nil {
+		return 0, fmt.Errorf("failed to initialize cache: %w", err)
+	}
+
 	// Adjust offset to absolute file offset by adding partition start
 	// Chunks use absolute file offsets, but ReadAt receives partition-relative offsets
 	partitionStart := int64(b.StartSector) * 512
 	off += partitionStart
 
-	for _, chk := range b.Chunks {
-		lenP := int64(len(p))
-		if lenP == 0 {
-			break
+	length := int64(len(p))
+
+	// Find starting chunk using binary search
+	chunkIdx := b.findChunkIndex(off)
+	if chunkIdx < 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+
+	for length > 0 && chunkIdx < len(b.Chunks) {
+		chk := b.Chunks[chunkIdx]
+
+		// Skip non-data chunks
+		if chk.Type == LAST_BLOCK || chk.Type == COMMENT {
+			chunkIdx++
+			continue
 		}
 
 		diff := off - int64(chk.DiskOffset)
-
-		// Skip chunks that end before our offset
-		if diff >= int64(chk.DiskLength) {
-			continue
-		}
-
-		// Skip chunks that start after our offset (diff < 0 means chunk is ahead)
 		if diff < 0 {
-			continue
+			diff = 0
 		}
 
-		var buf bytes.Buffer
-		if _, err = chk.DecompressChunk(b.sr, make([]byte, chk.CompressedLength), &buf); err != nil {
-			return n, err
+		// Get decompressed data from cache or decompress
+		var data []byte
+		if cached, found := b.cache.Get(chunkIdx); found {
+			data = cached
+		} else {
+			var buf bytes.Buffer
+			inBuf := make([]byte, chk.CompressedLength)
+			if _, err = chk.DecompressChunk(b.sr, inBuf, &buf); err != nil {
+				return n, err
+			}
+			data = buf.Bytes()
+			// Store a copy in cache (buf.Bytes() may be reused)
+			cacheCopy := make([]byte, len(data))
+			copy(cacheCopy, data)
+			b.cache.Add(chunkIdx, cacheCopy)
 		}
-		data := buf.Bytes()
 
 		size := int64(len(data)) - diff
 		if size <= 0 {
+			chunkIdx++
 			continue
 		}
-		if lenP < size {
-			size = lenP
+		if length < size {
+			size = length
 		}
 
-		n += copy(p, data[diff:diff+size])
-
-		p = p[size:]
-		off += size
+		copied := copy(p, data[diff:diff+size])
+		n += copied
+		p = p[copied:]
+		off += int64(copied)
+		length -= int64(copied)
+		chunkIdx++
 	}
 
 	if len(p) > 0 {
@@ -893,13 +951,14 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 				if _, err = sect.DecompressChunk(d.sr, dec, &out); err != nil {
 					return n, fmt.Errorf("failed to decompressed chunk %d", entryIdx)
 				}
+				// Cache the decompressed data
+				cacheCopy := make([]byte, out.Len())
+				copy(cacheCopy, out.Bytes())
+				d.cache.Add(entryIdx, cacheCopy)
 			}
 		} else {
 			if _, err = sect.DecompressChunk(d.sr, dec, &out); err != nil {
 				return n, fmt.Errorf("failed to decompressed chunk %d", entryIdx)
-			}
-			if !d.config.DisableCache {
-				d.cache.Add(entryIdx, out.Bytes())
 			}
 		}
 
