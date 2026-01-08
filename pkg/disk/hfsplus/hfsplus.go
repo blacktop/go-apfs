@@ -456,24 +456,21 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 }
 
 func (fs *HFSPlus) readBTRecordAt(offset int64) (record BTRecord, err error) {
-	sr := io.NewSectionReader(fs.device, offset, 1<<63-1)
-
-	// Read keyLength directly without binary.Read to avoid reflection allocations
+	// Read keyLength and recordType directly using ReadAt to avoid SectionReader allocation
 	var buf [4]byte
-	if _, err := sr.Read(buf[:2]); err != nil {
+	if _, err := fs.device.ReadAt(buf[:2], offset); err != nil {
 		return nil, fmt.Errorf("failed to read key length: %v", err)
 	}
 	keyLength := binary.BigEndian.Uint16(buf[:2])
 
-	sr.Seek(int64(keyLength), io.SeekCurrent) // skip past key
-
-	// Read recordType directly without binary.Read
-	if _, err := sr.Read(buf[:2]); err != nil {
+	// recordType is at offset + 2 (keyLength size) + keyLength
+	if _, err := fs.device.ReadAt(buf[:2], offset+2+int64(keyLength)); err != nil {
 		return nil, fmt.Errorf("failed to read record type: %v", err)
 	}
 	recordType := RecordType(binary.BigEndian.Uint16(buf[:2]))
 
-	sr.Seek(-int64(keyLength+2)-2, io.SeekCurrent) // rewind to start of record
+	// Create SectionReader only for Unmarshal (which needs io.Reader interface)
+	sr := io.NewSectionReader(fs.device, offset, 1<<63-1)
 
 	switch recordType {
 	case HFSPlusFolderRecord:
