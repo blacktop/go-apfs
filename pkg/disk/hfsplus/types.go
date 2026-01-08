@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -24,7 +25,8 @@ func (s Signature) String() string {
 	case HFSXSigWord:
 		return "HFSX"
 	default:
-		return fmt.Sprintf("unknown(%#04x)", s)
+		// Cast to uint16 to avoid infinite recursion
+		return fmt.Sprintf("unknown(%#04x)", uint16(s))
 	}
 }
 
@@ -695,7 +697,40 @@ func (fr *FileRecord) Unmarshal(r io.Reader) error {
 func (fr *FileRecord) Type() BTreeNodeKind { return BTLeafNodeKind }
 
 func (fr *FileRecord) Reader() io.Reader {
-	return io.NewSectionReader(*fr.r, int64(fr.FileInfo.DataFork.Extents[0].StartBlock*fr.blkSize), int64(fr.FileInfo.DataFork.LogicalSize))
+	// Create a multi-reader that reads from all extents
+	var readers []io.Reader
+	remainingSize := fr.FileInfo.DataFork.LogicalSize
+
+	for i, extent := range fr.FileInfo.DataFork.Extents {
+		if extent.BlockCount == 0 {
+			break // No more extents
+		}
+
+		extentSize := uint64(extent.BlockCount) * uint64(fr.blkSize)
+		if extentSize > remainingSize {
+			extentSize = remainingSize
+		}
+
+		// HFS+ blocks are relative to the HFS+ volume start, which is at byte 1024 in the partition
+		// However, the partition reader expects partition-relative offsets, so we don't add 1024 here
+		// The HFS+ volume header at 1024 is just metadata - blocks start at 0 within the volume
+		offset := int64(extent.StartBlock) * int64(fr.blkSize)
+
+		// Debug: log extent info for files named "Fork"
+		if fr.Key.NodeName.String() == "Fork" && i < 3 {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Fork extent %d: StartBlock=%d, BlockCount=%d, offset=%d, size=%d, blkSize=%d\n",
+				i, extent.StartBlock, extent.BlockCount, offset, extentSize, fr.blkSize)
+		}
+
+		readers = append(readers, io.NewSectionReader(*fr.r, offset, int64(extentSize)))
+
+		remainingSize -= extentSize
+		if remainingSize == 0 {
+			break
+		}
+	}
+
+	return io.MultiReader(readers...)
 }
 
 type ThreadKey struct {

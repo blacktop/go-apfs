@@ -76,22 +76,171 @@ func New(device io.ReaderAt) (*HFSPlus, error) {
 }
 
 func (fs *HFSPlus) Files() ([]*FileRecord, error) {
-	var files []*FileRecord
-
-	// Start from catalog B-tree root
 	if fs.catalogBTree == nil {
 		return nil, fmt.Errorf("catalog B-tree not initialized")
 	}
 
-	// Recursively traverse the B-tree starting at root folder with empty path.
-	if err := fs.listFilesInNode(fs.catalogBTree.Root, HFSRootFolderID, "", &files); err != nil {
-		return nil, fmt.Errorf("failed to list files: %v", err)
+	fmt.Fprintf(os.Stderr, "Starting B-tree traversal (collecting all records)...\n")
+
+	// Collect all records in one pass through the tree
+	allFiles := make(map[CatalogNodeID][]*FileRecord)
+	allFolders := make(map[CatalogNodeID][]*FolderRecord)
+
+	if err := fs.collectAllRecords(fs.catalogBTree.Root, allFiles, allFolders); err != nil {
+		return nil, fmt.Errorf("failed to collect records: %v", err)
 	}
+
+	fmt.Fprintf(os.Stderr, "Collected %d file groups and %d folder groups, building file paths...\n", len(allFiles), len(allFolders))
+
+	// Build folder paths
+	folderPaths := make(map[CatalogNodeID]string)
+	folderPaths[HFSRootFolderID] = ""
+
+	if err := fs.buildFolderPaths(HFSRootFolderID, "", allFolders, folderPaths); err != nil {
+		return nil, fmt.Errorf("failed to build folder paths: %v", err)
+	}
+
+	// Build final file list with paths
+	var files []*FileRecord
+	if err := fs.buildFileList(HFSRootFolderID, allFiles, allFolders, folderPaths, &files); err != nil {
+		return nil, fmt.Errorf("failed to build file list: %v", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "B-tree traversal complete, found %d files\n", len(files))
 
 	return files, nil
 }
 
+// collectAllRecords traverses the B-tree once and collects all file and folder records
+func (fs *HFSPlus) collectAllRecords(node *BTNode, allFiles map[CatalogNodeID][]*FileRecord, allFolders map[CatalogNodeID][]*FolderRecord) error {
+	switch node.Descriptor.Kind {
+	case BTIndexNodeKind:
+		// For index nodes, recursively traverse all child nodes
+		for _, record := range node.Records {
+			if catalogRecord, ok := record.(*CatalogRecord); ok {
+				// Read child node
+				childOffset := fs.getNodeOffset(catalogRecord.Link, int(fs.catalogBTree.BTHeaderNode.Header.NodeSize))
+				childNode, err := fs.readBTreeNodeAtOffset(childOffset, int(fs.catalogBTree.BTHeaderNode.Header.NodeSize), fs.volumeHdr.CatalogFile)
+				if err != nil {
+					return fmt.Errorf("failed to read child node: %v", err)
+				}
+				// Recursively collect from child
+				if err := fs.collectAllRecords(childNode, allFiles, allFolders); err != nil {
+					return err
+				}
+			}
+		}
+
+	case BTLeafNodeKind:
+		// For leaf nodes, collect all file and folder records
+		for _, record := range node.Records {
+			switch r := record.(type) {
+			case *FileRecord:
+				parentID := r.Key.ParentID
+				allFiles[parentID] = append(allFiles[parentID], r)
+			case *FolderRecord:
+				parentID := r.Key.ParentID
+				allFolders[parentID] = append(allFolders[parentID], r)
+			}
+		}
+	}
+
+	return nil
+}
+
+// buildFolderPaths recursively builds full paths for all folders
+func (fs *HFSPlus) buildFolderPaths(folderID CatalogNodeID, currentPath string, allFolders map[CatalogNodeID][]*FolderRecord, folderPaths map[CatalogNodeID]string) error {
+	folders := allFolders[folderID]
+	for _, folder := range folders {
+		folderName := folder.Key.NodeName.String()
+		var newPath string
+		if currentPath == "" {
+			newPath = "/" + folderName
+		} else {
+			newPath = filepath.Join(currentPath, folderName)
+		}
+		subFolderID := folder.FolderInfo.FolderID
+		folderPaths[subFolderID] = newPath
+
+		// Recursively build paths for subfolders
+		if err := fs.buildFolderPaths(subFolderID, newPath, allFolders, folderPaths); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildFileList recursively builds the final file list with full paths
+func (fs *HFSPlus) buildFileList(folderID CatalogNodeID, allFiles map[CatalogNodeID][]*FileRecord, allFolders map[CatalogNodeID][]*FolderRecord, folderPaths map[CatalogNodeID]string, files *[]*FileRecord) error {
+	currentPath := folderPaths[folderID]
+
+	// Add all files in this folder
+	for _, file := range allFiles[folderID] {
+		fileName := file.Key.NodeName.String()
+		var filePath string
+		if currentPath == "" {
+			filePath = "/" + fileName
+		} else {
+			filePath = filepath.Join(currentPath, fileName)
+		}
+		file.path = filePath
+		file.r = &fs.device
+		file.blkSize = fs.volumeHdr.BlockSize
+		*files = append(*files, file)
+	}
+
+	// Recursively process subfolders
+	for _, folder := range allFolders[folderID] {
+		subFolderID := folder.FolderInfo.FolderID
+		if err := fs.buildFileList(subFolderID, allFiles, allFolders, folderPaths, files); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (fs *HFSPlus) listFilesInNodeWithVisited(node *BTNode, folderID CatalogNodeID, currentPath string, files *[]*FileRecord, visited map[CatalogNodeID]bool, callCount *int) error {
+	// Prevent infinite recursion by tracking visited folders
+	if visited[folderID] {
+		return nil
+	}
+	visited[folderID] = true
+
+	// Limit total files to prevent hanging on corrupted filesystems
+	if len(*files) > 100000 {
+		return fmt.Errorf("file limit exceeded (possible filesystem corruption)")
+	}
+
+	return fs.listFilesInNodeInternal(node, folderID, currentPath, files, visited, callCount)
+}
+
 func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, currentPath string, files *[]*FileRecord) error {
+	// This is kept for backward compatibility but should use visited tracking
+	visited := make(map[CatalogNodeID]bool)
+	callCount := 0
+	return fs.listFilesInNodeInternal(node, folderID, currentPath, files, visited, &callCount)
+}
+
+func (fs *HFSPlus) listFilesInNodeInternal(node *BTNode, folderID CatalogNodeID, currentPath string, files *[]*FileRecord, visited map[CatalogNodeID]bool, callCount *int) error {
+	// Increment call counter and check for infinite loops
+	*callCount++
+
+	// Detect infinite loops - if we've made too many calls, bail out
+	if *callCount > 100000 {
+		return fmt.Errorf("call count exceeded (possible infinite loop), made %d calls", *callCount)
+	}
+
+	// Log progress every 1000 calls
+	if *callCount%1000 == 0 {
+		fmt.Fprintf(os.Stderr, "  Made %d calls, found %d files, visited %d folders...\n", *callCount, len(*files), len(visited))
+	}
+
+	// Progress logging every 500 files
+	if len(*files)%500 == 0 && len(*files) > 0 {
+		fmt.Fprintf(os.Stderr, "  Listed %d files so far...\n", len(*files))
+	}
+
 	// Handle different node types
 	switch node.Descriptor.Kind {
 	case BTIndexNodeKind:
@@ -110,7 +259,7 @@ func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, current
 					}
 
 					// Recursively process child node
-					if err := fs.listFilesInNode(childNode, folderID, currentPath, files); err != nil {
+					if err := fs.listFilesInNodeInternal(childNode, folderID, currentPath, files, visited, callCount); err != nil {
 						return err
 					}
 				}
@@ -146,7 +295,9 @@ func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, current
 					}
 					// Recursively process the subfolder's own files.
 					subFolderID := r.FolderInfo.FolderID
-					if err := fs.listFilesInNode(fs.catalogBTree.Root, subFolderID, newPath, files); err != nil {
+
+					// Recursively process subfolder through the wrapper to properly track visits and calls
+					if err := fs.listFilesInNodeWithVisited(fs.catalogBTree.Root, subFolderID, newPath, files, visited, callCount); err != nil {
 						return err
 					}
 				}
@@ -174,10 +325,11 @@ func (fs *HFSPlus) initBTrees() (err error) {
 	}
 
 	if fs.volumeHdr.AttributesFile.LogicalSize > 0 {
-		// Initialize attributes B-treeå
+		// Initialize attributes B-tree (optional, used for extended attributes)
 		fs.attributesBTree, err = fs.readBTree(fs.volumeHdr.AttributesFile)
 		if err != nil {
-			return fmt.Errorf("failed to read attributes B-tree: %v", err)
+			// Attributes B-tree is optional - log warning but continue
+			log.Warnf("failed to read attributes B-tree (continuing without extended attributes): %v", err)
 		}
 	}
 

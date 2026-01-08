@@ -9,6 +9,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/fatih/color v1.18.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
+	github.com/ulikunitz/xz v0.5.15
 	github.com/vbauerster/mpb/v7 v7.5.3
 )
 
