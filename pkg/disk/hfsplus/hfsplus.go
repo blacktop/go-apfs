@@ -447,7 +447,7 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 			if err != nil {
 				return nil, fmt.Errorf("failed to read record: %v", err)
 			}
-			log.Debugf("read record: %s", record)
+			// NOTE: Avoid log.Debugf here as it allocates even when disabled
 		default:
 			return nil, fmt.Errorf("unsupported node kind: %s", node.Descriptor.Kind)
 		}
