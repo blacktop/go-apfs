@@ -407,18 +407,16 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 		return node, nil // header nodes do not contain records.
 	}
 
-	deltas := make([]uint16, node.Descriptor.NumRecords)
-	if err := binary.Read(
-		io.NewSectionReader(
-			fs.device,
-			// The record offset array is stored at the end of the node.
-			offset+int64(nodeSize)-(2*int64(node.Descriptor.NumRecords)),
-			2*int64(node.Descriptor.NumRecords),
-		),
-		binary.BigEndian,
-		&deltas,
-	); err != nil {
+	// Read record offsets directly without binary.Read to avoid reflection
+	numRecords := int(node.Descriptor.NumRecords)
+	deltaBuf := make([]byte, 2*numRecords)
+	deltaOffset := offset + int64(nodeSize) - int64(2*numRecords)
+	if _, err := fs.device.ReadAt(deltaBuf, deltaOffset); err != nil {
 		return nil, fmt.Errorf("failed to read record offsets: %v", err)
+	}
+	deltas := make([]uint16, numRecords)
+	for i := 0; i < numRecords; i++ {
+		deltas[i] = binary.BigEndian.Uint16(deltaBuf[i*2 : i*2+2])
 	}
 	slices.Reverse(deltas) // offset deltas are stored in reverse order.
 
@@ -447,7 +445,7 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 			if err != nil {
 				return nil, fmt.Errorf("failed to read record: %v", err)
 			}
-			log.Debugf("read record: %s", record)
+			// NOTE: Avoid log.Debugf here as it allocates even when disabled
 		default:
 			return nil, fmt.Errorf("unsupported node kind: %s", node.Descriptor.Kind)
 		}
@@ -458,21 +456,21 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 }
 
 func (fs *HFSPlus) readBTRecordAt(offset int64) (record BTRecord, err error) {
-	sr := io.NewSectionReader(fs.device, offset, 1<<63-1)
-
-	var keyLength uint16
-	if err := binary.Read(sr, binary.BigEndian, &keyLength); err != nil {
+	// Read keyLength and recordType directly using ReadAt to avoid SectionReader allocation
+	var buf [4]byte
+	if _, err := fs.device.ReadAt(buf[:2], offset); err != nil {
 		return nil, fmt.Errorf("failed to read key length: %v", err)
 	}
+	keyLength := binary.BigEndian.Uint16(buf[:2])
 
-	sr.Seek(int64(keyLength), io.SeekCurrent) // skip past key
-
-	var recordType RecordType
-	if err := binary.Read(sr, binary.BigEndian, &recordType); err != nil {
+	// recordType is at offset + 2 (keyLength size) + keyLength
+	if _, err := fs.device.ReadAt(buf[:2], offset+2+int64(keyLength)); err != nil {
 		return nil, fmt.Errorf("failed to read record type: %v", err)
 	}
+	recordType := RecordType(binary.BigEndian.Uint16(buf[:2]))
 
-	sr.Seek(-int64(keyLength+uint16(binary.Size(keyLength)))-int64(binary.Size(recordType)), io.SeekCurrent) // rewind to start of record
+	// Create SectionReader only for Unmarshal (which needs io.Reader interface)
+	sr := io.NewSectionReader(fs.device, offset, 1<<63-1)
 
 	switch recordType {
 	case HFSPlusFolderRecord:
