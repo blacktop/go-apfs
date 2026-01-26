@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -701,7 +700,7 @@ func (fr *FileRecord) Reader() io.Reader {
 	var readers []io.Reader
 	remainingSize := fr.FileInfo.DataFork.LogicalSize
 
-	for i, extent := range fr.FileInfo.DataFork.Extents {
+	for _, extent := range fr.FileInfo.DataFork.Extents {
 		if extent.BlockCount == 0 {
 			break // No more extents
 		}
@@ -715,12 +714,6 @@ func (fr *FileRecord) Reader() io.Reader {
 		// However, the partition reader expects partition-relative offsets, so we don't add 1024 here
 		// The HFS+ volume header at 1024 is just metadata - blocks start at 0 within the volume
 		offset := int64(extent.StartBlock) * int64(fr.blkSize)
-
-		// Debug: log extent info for files named "Fork"
-		if fr.Key.NodeName.String() == "Fork" && i < 3 {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Fork extent %d: StartBlock=%d, BlockCount=%d, offset=%d, size=%d, blkSize=%d\n",
-				i, extent.StartBlock, extent.BlockCount, offset, extentSize, fr.blkSize)
-		}
 
 		readers = append(readers, io.NewSectionReader(*fr.r, offset, int64(extentSize)))
 
