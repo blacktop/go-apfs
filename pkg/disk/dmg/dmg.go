@@ -23,6 +23,7 @@ import (
 
 	lzfse "github.com/blacktop/lzfse-cgo"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/ulikunitz/xz"
 	"github.com/ulikunitz/xz/lzma"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
@@ -101,6 +102,18 @@ func getInputBuffer(size uint64) (*[]byte, *sync.Pool) {
 		buf := make([]byte, size)
 		return &buf, nil
 	}
+}
+
+// xzMagic is the 6-byte header for XZ streams (\xFD7zXZ\x00).
+// DMG block maps label both raw LZMA1 and XZ/LZMA2 as type 0x80000008,
+// so we sniff the magic to pick the right decompressor.
+var xzMagic = []byte{0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00}
+
+func newLZMAReader(data []byte) (io.Reader, error) {
+	if len(data) >= 6 && bytes.Equal(data[:6], xzMagic) {
+		return xz.NewReader(bytes.NewReader(data))
+	}
+	return lzma.NewReader(bytes.NewReader(data))
 }
 
 const (
@@ -441,7 +454,7 @@ func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
 			if _, err := b.sr.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
 				return err
 			}
-			lzmaReader, err := lzma.NewReader(bytes.NewReader(buff))
+			lzmaReader, err := newLZMAReader(buff)
 			if err != nil {
 				return fmt.Errorf("failed to create LZMA reader: %w", err)
 			}
@@ -690,7 +703,7 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
-		lzmaReader, err := lzma.NewReader(bytes.NewReader(in))
+		lzmaReader, err := newLZMAReader(in)
 		if err != nil {
 			return -1, fmt.Errorf("failed to create LZMA reader: %w", err)
 		}
