@@ -575,7 +575,10 @@ func (a *APFS) copyFile(rec types.NodeEntry, dest string) error {
 			switch rec.Key.(types.JXattrKeyT).Name {
 			case types.XATTR_RESOURCEFORK_EA_NAME:
 				if rec.Val.(types.JXattrValT).Flags.DataEmbedded() {
-					binary.Read(bytes.NewReader(rec.Val.(types.JXattrValT).Data.([]byte)), binary.LittleEndian, &decmpfsHdr)
+					decmpfsHdr = &types.DecmpfsDiskHeader{}
+					if err := binary.Read(bytes.NewReader(rec.Val.(types.JXattrValT).Data.([]byte)), binary.LittleEndian, decmpfsHdr); err != nil {
+						return fmt.Errorf("failed to read embedded decmpfs header: %v", err)
+					}
 				} else if rec.Val.(types.JXattrValT).Flags.DataStream() {
 					xattrRecords, err := a.fsOMapBtree.GetFSRecordsForOid(
 						sr,
@@ -603,7 +606,6 @@ func (a *APFS) copyFile(rec types.NodeEntry, dest string) error {
 				}
 			case types.XATTR_SYMLINK_EA_NAME:
 				symlink = string(rec.Val.(types.JXattrValT).Data.([]byte)[:])
-				_ = symlink
 			}
 		}
 	}
@@ -613,6 +615,12 @@ func (a *APFS) copyFile(rec types.NodeEntry, dest string) error {
 	}
 
 	outPath := filepath.Join(dest, fileName)
+	if symlink != "" {
+		if err := os.Symlink(symlink, outPath); err != nil {
+			return fmt.Errorf("failed to create symlink %s -> %s: %v", outPath, symlink, err)
+		}
+		return nil
+	}
 	fo, err := os.Create(outPath)
 	if err != nil {
 		return fmt.Errorf("failed to create %s: %v", outPath, err)
@@ -620,6 +628,9 @@ func (a *APFS) copyFile(rec types.NodeEntry, dest string) error {
 	defer fo.Close()
 
 	if compressed {
+		if decmpfsHdr == nil {
+			return fmt.Errorf("missing decmpfs header for compressed file %s", outPath)
+		}
 		w := bufio.NewWriter(fo)
 		if err := decmpfsHdr.DecompressFile(a.r, w, fexts, false); err != nil {
 			return fmt.Errorf("failed to decompress and write %s: %v", outPath, err)
@@ -633,10 +644,23 @@ func (a *APFS) copyFile(rec types.NodeEntry, dest string) error {
 		}
 		log.Infof("Created %s", outPath)
 	} else {
+		bw := bufio.NewWriter(fo)
+		remaining := int64(totalBytesWritten)
 		for _, fext := range fexts {
-			if err := a.dev.ReadFile(bufio.NewWriter(fo), int64(fext.Block*types.BLOCK_SIZE), int64(totalBytesWritten)); err != nil {
+			if remaining <= 0 {
+				break
+			}
+			extentBytes := int64(fext.Length * types.BLOCK_SIZE)
+			if extentBytes > remaining {
+				extentBytes = remaining
+			}
+			if err := a.dev.ReadFile(bw, int64(fext.Block*types.BLOCK_SIZE), extentBytes); err != nil {
 				return fmt.Errorf("failed to write file data from device: %v", err)
 			}
+			remaining -= extentBytes
+		}
+		if err := bw.Flush(); err != nil {
+			return fmt.Errorf("failed to flush %s: %v", outPath, err)
 		}
 		if info, err := fo.Stat(); err == nil {
 			if info.Size() != int64(totalBytesWritten) {
