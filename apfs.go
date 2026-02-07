@@ -605,7 +605,7 @@ func (a *APFS) copyFile(rec types.NodeEntry, dest string) error {
 					return fmt.Errorf("failed to get decmpfs header: %v", err)
 				}
 			case types.XATTR_SYMLINK_EA_NAME:
-				symlink = string(rec.Val.(types.JXattrValT).Data.([]byte)[:])
+				symlink = strings.TrimRight(string(rec.Val.(types.JXattrValT).Data.([]byte)[:]), "\x00")
 			}
 		}
 	}
