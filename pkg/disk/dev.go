@@ -48,7 +48,8 @@ func (g *Generic) Close() error {
 }
 
 func (g *Generic) ReadFile(w *bufio.Writer, off, length int64) error {
-	_, err := io.CopyN(w, g.f, length)
+	sr := io.NewSectionReader(g.ReaderAt, off, length)
+	_, err := io.CopyN(w, sr, length)
 	return err
 }
 
