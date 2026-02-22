@@ -650,7 +650,7 @@ func (a *APFS) copyFile(rec types.NodeEntry, dest string) error {
 			if remaining <= 0 {
 				break
 			}
-			extentBytes := min(int64(fext.Length*types.BLOCK_SIZE), remaining)
+			extentBytes := min(int64(fext.Length), remaining)
 			if err := a.dev.ReadFile(bw, int64(fext.Block*types.BLOCK_SIZE), extentBytes); err != nil {
 				return fmt.Errorf("failed to write file data from device: %v", err)
 			}

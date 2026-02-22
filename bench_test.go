@@ -346,7 +346,8 @@ func TestIntegrationExtractDMG(t *testing.T) {
 				continue
 			}
 
-			destPath := filepath.Join(tmpDir, f.Path())
+			relPath := strings.TrimPrefix(f.Path(), string(filepath.Separator))
+			destPath := filepath.Join(tmpDir, relPath)
 			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 				continue
 			}
