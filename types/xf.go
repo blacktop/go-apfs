@@ -61,7 +61,7 @@ type x_field_t struct {
 
 type Xfield struct {
 	x_field_t
-	Field interface{}
+	Field any
 }
 
 func (f Xfield) String() string {

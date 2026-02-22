@@ -3,7 +3,6 @@ package types
 import (
 	"bufio"
 	"bytes"
-	"io/ioutil"
 
 	"compress/zlib"
 	"encoding/binary"
@@ -123,7 +122,7 @@ func GetDecmpfsHeader(ne NodeEntry) (*DecmpfsDiskHeader, error) {
 			if err != nil {
 				return nil, err
 			}
-			hdr.AttrBytes, err = ioutil.ReadAll(r)
+			hdr.AttrBytes, err = io.ReadAll(r)
 			if err != nil {
 				return nil, err
 			}

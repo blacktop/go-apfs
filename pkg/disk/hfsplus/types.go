@@ -705,10 +705,7 @@ func (fr *FileRecord) Reader() io.Reader {
 			break // No more extents
 		}
 
-		extentSize := uint64(extent.BlockCount) * uint64(fr.blkSize)
-		if extentSize > remainingSize {
-			extentSize = remainingSize
-		}
+		extentSize := min(uint64(extent.BlockCount)*uint64(fr.blkSize), remainingSize)
 
 		// HFS+ blocks are relative to the HFS+ volume start, which is at byte 1024 in the partition
 		// However, the partition reader expects partition-relative offsets, so we don't add 1024 here

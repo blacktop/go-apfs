@@ -167,7 +167,7 @@ func (a *APFS) getValidCSB() error {
 	}
 	xpDescBlocks := nxsb.XpDescBlocks & ^(uint32(1) << 31)
 
-	for i := uint32(0); i < xpDescBlocks; i++ {
+	for i := range xpDescBlocks {
 		o, err := types.ReadObj(a.r, nxsb.XpDescBase+uint64(i))
 		if err != nil {
 			if errors.Is(err, types.ErrBadBlockChecksum) {
@@ -464,7 +464,7 @@ func (a *APFS) Tree(path string) error {
 
 	fstree := types.NewFSTree("/")
 
-	for _, part := range strings.Split(path, string(filepath.Separator)) {
+	for part := range strings.SplitSeq(path, string(filepath.Separator)) {
 		if len(part) > 0 {
 			for _, rec := range fsRecords {
 				switch rec.Hdr.GetType() {
@@ -650,10 +650,7 @@ func (a *APFS) copyFile(rec types.NodeEntry, dest string) error {
 			if remaining <= 0 {
 				break
 			}
-			extentBytes := int64(fext.Length * types.BLOCK_SIZE)
-			if extentBytes > remaining {
-				extentBytes = remaining
-			}
+			extentBytes := min(int64(fext.Length*types.BLOCK_SIZE), remaining)
 			if err := a.dev.ReadFile(bw, int64(fext.Block*types.BLOCK_SIZE), extentBytes); err != nil {
 				return fmt.Errorf("failed to write file data from device: %v", err)
 			}
