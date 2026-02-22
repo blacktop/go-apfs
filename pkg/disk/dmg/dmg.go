@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"unicode/utf16"
 
 	"github.com/apex/log"
@@ -22,9 +23,98 @@ import (
 
 	lzfse "github.com/blacktop/lzfse-cgo"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/ulikunitz/xz"
+	"github.com/ulikunitz/xz/lzma"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 )
+
+// Buffer pools to reduce allocations
+var (
+	// Pool for bytes.Buffer used in decompression output
+	bufferPool = sync.Pool{
+		New: func() any {
+			return new(bytes.Buffer)
+		},
+	}
+
+	// Pool for input byte slices (compressed data) - keyed by size buckets
+	// Common chunk sizes: 64KB, 128KB, 256KB, 512KB, 1MB
+	inputBufferPool64K = sync.Pool{
+		New: func() any {
+			b := make([]byte, 64*1024)
+			return &b
+		},
+	}
+	inputBufferPool128K = sync.Pool{
+		New: func() any {
+			b := make([]byte, 128*1024)
+			return &b
+		},
+	}
+	inputBufferPool256K = sync.Pool{
+		New: func() any {
+			b := make([]byte, 256*1024)
+			return &b
+		},
+	}
+	inputBufferPool512K = sync.Pool{
+		New: func() any {
+			b := make([]byte, 512*1024)
+			return &b
+		},
+	}
+	inputBufferPool1M = sync.Pool{
+		New: func() any {
+			b := make([]byte, 1024*1024)
+			return &b
+		},
+	}
+
+	// Pool for bytes.Reader used as zlib input
+	bytesReaderPool = sync.Pool{
+		New: func() any {
+			return bytes.NewReader(nil)
+		},
+	}
+)
+
+// getInputBuffer returns a buffer from the appropriate pool based on size
+func getInputBuffer(size uint64) (*[]byte, *sync.Pool) {
+	switch {
+	case size <= 64*1024:
+		buf := inputBufferPool64K.Get().(*[]byte)
+		return buf, &inputBufferPool64K
+	case size <= 128*1024:
+		buf := inputBufferPool128K.Get().(*[]byte)
+		return buf, &inputBufferPool128K
+	case size <= 256*1024:
+		buf := inputBufferPool256K.Get().(*[]byte)
+		return buf, &inputBufferPool256K
+	case size <= 512*1024:
+		buf := inputBufferPool512K.Get().(*[]byte)
+		return buf, &inputBufferPool512K
+	case size <= 1024*1024:
+		buf := inputBufferPool1M.Get().(*[]byte)
+		return buf, &inputBufferPool1M
+	default:
+		// For larger sizes, just allocate
+		buf := make([]byte, size)
+		return &buf, nil
+	}
+}
+
+// xzMagic is the 6-byte header for XZ streams (\xFD7zXZ\x00).
+// DMG block maps label both raw LZMA1 and XZ/LZMA2 as type 0x80000008,
+// so we sniff the magic to pick the right decompressor.
+var xzMagic = []byte{0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00}
+
+func newLZMAReader(data []byte) (io.Reader, error) {
+	if len(data) >= 6 && bytes.Equal(data[:6], xzMagic) {
+		return xz.NewReader(bytes.NewReader(data))
+	}
+	return lzma.NewReader(bytes.NewReader(data))
+}
 
 const (
 	sectorSize = 0x200
@@ -187,7 +277,8 @@ type Partition struct {
 	Name   string
 	Chunks []udifBlockChunk
 
-	sr *io.SectionReader
+	sr    *io.SectionReader
+	cache *lru.Cache[int, []byte] // LRU cache for decompressed chunks
 }
 
 type udifBlockChunkType uint32
@@ -359,7 +450,24 @@ func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
 			total += n
 			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		case COMPRESSS_LZMA:
-			return fmt.Errorf("%s is currently unsupported", chunk.Type)
+			buff = buff[:chunk.CompressedLength]
+			if _, err := b.sr.ReadAt(buff, int64(chunk.CompressedOffset)); err != nil {
+				return err
+			}
+			lzmaReader, err := newLZMAReader(buff)
+			if err != nil {
+				return fmt.Errorf("failed to create LZMA reader: %w", err)
+			}
+			var decompressed bytes.Buffer
+			if _, err := decompressed.ReadFrom(lzmaReader); err != nil {
+				return fmt.Errorf("failed to decompress LZMA data: %w", err)
+			}
+			n, err = w.Write(decompressed.Bytes())
+			if err != nil {
+				return err
+			}
+			total += n
+			log.Debugf(diskReadColor("%d) Wrote %#x bytes of %s data (output size: %#x)", idx, n, chunk.Type, total))
 		case LAST_BLOCK:
 			if err := w.Flush(); err != nil {
 				return err
@@ -382,33 +490,128 @@ func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
 
 var _ io.ReaderAt = (*Partition)(nil)
 
-func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
-	for _, chk := range b.Chunks {
-		lenP := int64(len(p))
-		if lenP == 0 {
-			break
-		}
+// initCache initializes the LRU cache for decompressed chunks if not already initialized
+func (b *Partition) initCache() error {
+	if b.cache != nil {
+		return nil
+	}
+	// Use BuffersNeeded from the partition metadata, default to 256 if not set
+	cacheSize := int(b.BuffersNeeded)
+	if cacheSize == 0 {
+		cacheSize = 256
+	}
+	var err error
+	b.cache, err = lru.New[int, []byte](cacheSize)
+	return err
+}
 
-		diff := off - int64(chk.DiskOffset)
-		if diff >= int64(chk.DiskLength) {
+// findChunkIndex uses binary search to find the chunk containing the given offset
+func (b *Partition) findChunkIndex(off int64) int {
+	beg := 0
+	end := len(b.Chunks) - 1
+
+	for beg <= end {
+		mid := (beg + end) / 2
+		chk := b.Chunks[mid]
+		if off >= int64(chk.DiskOffset) && off < int64(chk.DiskOffset+chk.DiskLength) {
+			return mid
+		} else if off < int64(chk.DiskOffset) {
+			end = mid - 1
+		} else {
+			beg = mid + 1
+		}
+	}
+	return -1
+}
+
+func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
+	// Initialize cache on first use
+	if err := b.initCache(); err != nil {
+		return 0, fmt.Errorf("failed to initialize cache: %w", err)
+	}
+
+	// Adjust offset to absolute file offset by adding partition start
+	// Chunks use absolute file offsets, but ReadAt receives partition-relative offsets
+	partitionStart := int64(b.StartSector) * 512
+	off += partitionStart
+
+	length := int64(len(p))
+
+	// Find starting chunk using binary search
+	chunkIdx := b.findChunkIndex(off)
+	if chunkIdx < 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+
+	for length > 0 && chunkIdx < len(b.Chunks) {
+		chk := b.Chunks[chunkIdx]
+
+		// Skip non-data chunks
+		if chk.Type == LAST_BLOCK || chk.Type == COMMENT {
+			chunkIdx++
 			continue
 		}
 
-		var buf bytes.Buffer
-		if _, err = chk.DecompressChunk(b.sr, make([]byte, chk.CompressedLength), &buf); err != nil {
-			return n, err
+		diff := off - int64(chk.DiskOffset)
+		if diff < 0 {
+			diff = 0
 		}
-		data := buf.Bytes()
+
+		// Get decompressed data from cache or decompress
+		var data []byte
+		if cached, found := b.cache.Get(chunkIdx); found {
+			data = cached
+		} else {
+			// Get output buffer from pool
+			buf := bufferPool.Get().(*bytes.Buffer)
+			buf.Reset()
+			// Pre-size buffer to expected decompressed size to avoid growth
+			if int64(buf.Cap()) < int64(chk.DiskLength) {
+				buf.Grow(int(chk.DiskLength))
+			}
+
+			// Get input buffer from pool
+			inBufPtr, inPool := getInputBuffer(chk.CompressedLength)
+			inBuf := (*inBufPtr)[:chk.CompressedLength]
+
+			if _, err = chk.DecompressChunk(b.sr, inBuf, buf); err != nil {
+				if inPool != nil {
+					inPool.Put(inBufPtr)
+				}
+				bufferPool.Put(buf)
+				return n, err
+			}
+
+			// Return input buffer to pool
+			if inPool != nil {
+				inPool.Put(inBufPtr)
+			}
+
+			// Store a copy in cache
+			cacheCopy := make([]byte, buf.Len())
+			copy(cacheCopy, buf.Bytes())
+			b.cache.Add(chunkIdx, cacheCopy)
+			data = cacheCopy
+
+			// Return output buffer to pool
+			bufferPool.Put(buf)
+		}
 
 		size := int64(len(data)) - diff
-		if lenP < size {
-			size = lenP
+		if size <= 0 {
+			chunkIdx++
+			continue
+		}
+		if length < size {
+			size = length
 		}
 
-		n += copy(p, data[diff:diff+size])
-
-		p = p[size:]
-		off += size
+		copied := copy(p, data[diff:diff+size])
+		n += copied
+		p = p[copied:]
+		off += int64(copied)
+		length -= int64(copied)
+		chunkIdx++
 	}
 
 	if len(p) > 0 {
@@ -459,13 +662,21 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
 			return
 		}
-		zr, err := zlib.NewReader(bytes.NewReader(in))
+		// Get bytes.Reader from pool and reset it
+		br := bytesReaderPool.Get().(*bytes.Reader)
+		br.Reset(in)
+		zr, err := zlib.NewReader(br)
 		if err != nil {
+			bytesReaderPool.Put(br)
 			return -1, fmt.Errorf("failed to create zlib reader")
 		}
 		if nn, err = out.ReadFrom(zr); err != nil {
+			zr.Close()
+			bytesReaderPool.Put(br)
 			return -1, fmt.Errorf("failed to write COMPRESS_ZLIB data")
 		}
+		zr.Close()
+		bytesReaderPool.Put(br)
 		n = int(nn)
 		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESSS_BZ2:
@@ -488,7 +699,19 @@ func (chunk *udifBlockChunk) DecompressChunk(r *io.SectionReader, in []byte, out
 		}
 		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case COMPRESSS_LZMA:
-		return n, fmt.Errorf("COMPRESSS_LZMA is currently unsupported")
+		in = in[:chunk.CompressedLength]
+		if _, err = r.ReadAt(in, int64(chunk.CompressedOffset)); err != nil {
+			return
+		}
+		lzmaReader, err := newLZMAReader(in)
+		if err != nil {
+			return -1, fmt.Errorf("failed to create LZMA reader: %w", err)
+		}
+		if nn, err = out.ReadFrom(lzmaReader); err != nil {
+			return -1, fmt.Errorf("failed to write COMPRESSS_LZMA data: %w", err)
+		}
+		n = int(nn)
+		log.Debugf(diskReadColor("Wrote %#x bytes of %s data", n, chunk.Type))
 	case LAST_BLOCK:
 	default:
 		return n, fmt.Errorf("chuck has unsupported compression type: %#x", chunk.Type)
@@ -848,13 +1071,14 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 				if _, err = sect.DecompressChunk(d.sr, dec, &out); err != nil {
 					return n, fmt.Errorf("failed to decompressed chunk %d", entryIdx)
 				}
+				// Cache the decompressed data
+				cacheCopy := make([]byte, out.Len())
+				copy(cacheCopy, out.Bytes())
+				d.cache.Add(entryIdx, cacheCopy)
 			}
 		} else {
 			if _, err = sect.DecompressChunk(d.sr, dec, &out); err != nil {
 				return n, fmt.Errorf("failed to decompressed chunk %d", entryIdx)
-			}
-			if !d.config.DisableCache {
-				d.cache.Add(entryIdx, out.Bytes())
 			}
 		}
 
