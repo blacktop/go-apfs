@@ -21,6 +21,15 @@ func skipIfNoTestDMG(t testing.TB) {
 	}
 }
 
+func safeExtractionPath(baseDir, fsPath string) (string, bool) {
+	relPath := filepath.Clean(strings.TrimLeft(fsPath, `/\`))
+	if relPath == "." || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+
+	return filepath.Join(baseDir, relPath), true
+}
+
 // BenchmarkDMGOpen measures the time to open and parse a DMG file.
 // This includes reading the footer, plist, and partition table.
 func BenchmarkDMGOpen(b *testing.B) {
@@ -346,8 +355,10 @@ func TestIntegrationExtractDMG(t *testing.T) {
 				continue
 			}
 
-			relPath := strings.TrimPrefix(f.Path(), string(filepath.Separator))
-			destPath := filepath.Join(tmpDir, relPath)
+			destPath, ok := safeExtractionPath(tmpDir, f.Path())
+			if !ok {
+				continue
+			}
 			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 				continue
 			}
