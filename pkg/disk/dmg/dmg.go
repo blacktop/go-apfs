@@ -319,7 +319,7 @@ func (t udifBlockChunkType) String() string {
 	case LAST_BLOCK:
 		return "LAST_BLOCK"
 	default:
-		return fmt.Sprintf("UNKNOWN (%#x)", t)
+		return fmt.Sprintf("UNKNOWN (%#x)", uint32(t))
 	}
 }
 
@@ -971,8 +971,9 @@ func (d *DMG) Load() error {
 							found = true
 							d.firstAPFSPartition = i
 							d.maxChunkSize = block.maxChunkSize()
+							cacheSize := max(int(block.BuffersNeeded), 1)
 							// setup sector cache
-							d.cache, err = lru.NewWithEvict(int(block.BuffersNeeded), func(k int, v []byte) {
+							d.cache, err = lru.NewWithEvict(cacheSize, func(k int, v []byte) {
 								log.Warn("evicted item from DMG read cache (maybe we should increase it)")
 								d.evictCounter++
 							})

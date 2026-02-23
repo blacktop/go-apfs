@@ -12,10 +12,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
 )
 
 const (
 	EncryptedMagic = "encrcdsa"
+
+	blobEncAlgorithm3DESLegacy = 17
+	blobEncAlgorithm3DESCMS    = 0x80000001
+	blobEncModeCBC             = 6
+	blobEncPaddingPKCS7        = 7
 )
 
 var ErrNotEncrypted = fmt.Errorf("not an encrypted DMG")
@@ -42,7 +50,7 @@ type EncryptionHeader struct {
 	BlobEncIvSize        uint32
 	BlobEncIv            [32]byte
 	BlobEncKeyBits       uint32
-	BlobEncAlgorithm     uint32 // 17
+	BlobEncAlgorithm     uint32 // 17 (legacy) or 0x80000001 (CMS wrapped)
 	BlobEncPadding       uint32 // 7
 	BlobEncMode          uint32 // 6
 	EncryptedKeyblobSize uint32
@@ -71,7 +79,14 @@ func DecryptDMGWithPassword(path string, password string) (string, error) {
 		return "", fmt.Errorf("unsupported encryption version: %d", hdr.Version)
 	}
 
-	if hdr.BlobEncAlgorithm != 17 || hdr.BlobEncMode != 6 || hdr.BlobEncPadding != 7 {
+	if hdr.BlobEncMode != blobEncModeCBC || hdr.BlobEncPadding != blobEncPaddingPKCS7 {
+		return "", fmt.Errorf("unsupported blob encryption algorithm: %d, mode: %d, padding: %d",
+			hdr.BlobEncAlgorithm, hdr.BlobEncMode, hdr.BlobEncPadding)
+	}
+	if hdr.BlobEncAlgorithm == blobEncAlgorithm3DESCMS {
+		return decryptDMGWithPasswordUsingHdiutil(path, password)
+	}
+	if hdr.BlobEncAlgorithm != blobEncAlgorithm3DESLegacy {
 		return "", fmt.Errorf("unsupported blob encryption algorithm: %d, mode: %d, padding: %d",
 			hdr.BlobEncAlgorithm, hdr.BlobEncMode, hdr.BlobEncPadding)
 	}
@@ -122,6 +137,42 @@ func DecryptDMGWithPassword(path string, password string) (string, error) {
 	hmacKey := keyblob[aesKeySize : aesKeySize+hmacKeySize]
 
 	return decryptDMGWithKeys(path, aesKey, hmacKey)
+}
+
+func decryptDMGWithPasswordUsingHdiutil(path string, password string) (string, error) {
+	if runtime.GOOS != "darwin" {
+		return "", fmt.Errorf("unsupported blob encryption algorithm for non-darwin hosts")
+	}
+
+	tmp, err := os.CreateTemp("", "dmg-*.dmg")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp DMG file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to close temp DMG file: %w", err)
+	}
+	if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("failed to prepare temp DMG path: %w", err)
+	}
+
+	cmd := exec.Command(
+		"hdiutil",
+		"convert",
+		"-format", "UDRO",
+		"-srcimagekey", "passphrase="+password,
+		"-ov",
+		"-o", tmpPath,
+		path,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("hdiutil convert failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return tmpPath, nil
 }
 
 // DecryptDMGWithKey decrypts a DMG file using a hex-encoded key string.
