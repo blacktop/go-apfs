@@ -1,9 +1,10 @@
 package apfs_test
 
 import (
-	"io"
+	"bufio"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,37 +28,23 @@ func openTestAPFS(b *testing.B) *apfs.APFS {
 	}
 	b.Cleanup(func() { dmgFile.Close() })
 
-	var part *dmg.Partition
-	for i := range dmgFile.Partitions {
-		if strings.Contains(dmgFile.Partitions[i].Name, "Apple_APFS") {
-			part = &dmgFile.Partitions[i]
-			break
-		}
-	}
-	if part == nil {
+	i := slices.IndexFunc(dmgFile.Partitions, func(p dmg.Partition) bool { return strings.Contains(p.Name, "Apple_APFS") })
+	if i < 0 {
 		b.Skip("no APFS partition found in DMG")
 	}
+	part := &dmgFile.Partitions[i]
 
 	raw := filepath.Join(b.TempDir(), "partition.raw")
 	out, err := os.Create(raw)
 	if err != nil {
 		b.Fatal(err)
 	}
-	buf := make([]byte, 1<<20)
-	for off := int64(0); ; {
-		n, err := part.ReadAt(buf, off)
-		if n > 0 {
-			if _, werr := out.Write(buf[:n]); werr != nil {
-				b.Fatal(werr)
-			}
-			off += int64(n)
-		}
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			break
-		}
-		if err != nil {
-			b.Fatalf("failed to read partition: %v", err)
-		}
+	bw := bufio.NewWriter(out)
+	if err := part.Write(bw); err != nil {
+		b.Fatalf("failed to dump partition: %v", err)
+	}
+	if err := bw.Flush(); err != nil {
+		b.Fatal(err)
 	}
 	out.Close()
 
