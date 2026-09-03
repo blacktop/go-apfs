@@ -77,8 +77,7 @@ func BenchmarkAPFSCopy(b *testing.B) {
 	volName := strings.TrimRight(string(fs.Volume.VolumeName[:]), "\x00")
 	src := "/" + volName + ".app"
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		dest := filepath.Join(b.TempDir(), "out")
 		if err := fs.Copy(src, dest); err != nil {
 			b.Fatalf("failed to copy %s: %v", src, err)
