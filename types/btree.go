@@ -156,7 +156,7 @@ type block struct {
 // BTreeNodePhys is a btree_node_phys_t struct with data array
 type BTreeNodePhys struct {
 	BTreeNodePhysT
-	Entries []interface{}
+	Entries []any
 	Parent  *BTreeNodePhys
 	Info    *BTreeInfoT
 
@@ -908,7 +908,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 
 	node := volFsRootNode
 
-	for i := uint16(0); i < treeHeight; i++ {
+	for i := range treeHeight {
 		for idx, entry := range node.Entries {
 
 			tocEntry = entry.(NodeEntry)
@@ -1014,7 +1014,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 
 		node = volFsRootNode
 
-		for i := uint16(0); i < treeHeight; i++ {
+		for i := range treeHeight {
 
 			/**
 			 * If `desc_path[i]` isn't a valid entry index in this node, that

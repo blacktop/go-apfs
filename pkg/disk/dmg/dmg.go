@@ -319,7 +319,7 @@ func (t udifBlockChunkType) String() string {
 	case LAST_BLOCK:
 		return "LAST_BLOCK"
 	default:
-		return fmt.Sprintf("UNKNOWN (%#x)", t)
+		return fmt.Sprintf("UNKNOWN (%#x)", uint32(t))
 	}
 }
 
@@ -552,10 +552,7 @@ func (b *Partition) ReadAt(p []byte, off int64) (n int, err error) {
 			continue
 		}
 
-		diff := off - int64(chk.DiskOffset)
-		if diff < 0 {
-			diff = 0
-		}
+		diff := max(off-int64(chk.DiskOffset), 0)
 
 		// Get decompressed data from cache or decompress
 		var data []byte
@@ -974,8 +971,9 @@ func (d *DMG) Load() error {
 							found = true
 							d.firstAPFSPartition = i
 							d.maxChunkSize = block.maxChunkSize()
+							cacheSize := max(int(block.BuffersNeeded), 1)
 							// setup sector cache
-							d.cache, err = lru.NewWithEvict(int(block.BuffersNeeded), func(k int, v []byte) {
+							d.cache, err = lru.NewWithEvict(cacheSize, func(k int, v []byte) {
 								log.Warn("evicted item from DMG read cache (maybe we should increase it)")
 								d.evictCounter++
 							})
@@ -1055,11 +1053,7 @@ func (d *DMG) ReadAt(buf []byte, off int64) (n int, err error) {
 
 		sect := apfsChunks[entryIdx]
 
-		if off-int64(sect.DiskOffset) < 0 {
-			rdOffs = 0
-		} else {
-			rdOffs = off - int64(sect.DiskOffset)
-		}
+		rdOffs = max(off-int64(sect.DiskOffset), 0)
 
 		if !d.config.DisableCache {
 			// check the cache
@@ -1147,11 +1141,7 @@ func (d *DMG) ReadFile(w *bufio.Writer, off, length int64) (err error) {
 
 		sect := apfsChunks[entryIdx]
 
-		if off-int64(sect.DiskOffset) < 0 {
-			rdOffs = 0
-		} else {
-			rdOffs = off - int64(sect.DiskOffset)
-		}
+		rdOffs = max(off-int64(sect.DiskOffset), 0)
 
 		if _, err = sect.DecompressChunk(d.sr, dec, &out); err != nil {
 			return fmt.Errorf("failed to decompressed chunk %d", entryIdx)

@@ -115,7 +115,7 @@ type NxSuperblock struct {
 
 type CheckpointDesc struct {
 	Obj  ObjPhysT
-	Body interface{}
+	Body any
 }
 
 type CheckpointMappingT struct {

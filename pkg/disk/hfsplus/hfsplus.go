@@ -415,7 +415,7 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 		return nil, fmt.Errorf("failed to read record offsets: %v", err)
 	}
 	deltas := make([]uint16, numRecords)
-	for i := 0; i < numRecords; i++ {
+	for i := range numRecords {
 		deltas[i] = binary.BigEndian.Uint16(deltaBuf[i*2 : i*2+2])
 	}
 	slices.Reverse(deltas) // offset deltas are stored in reverse order.

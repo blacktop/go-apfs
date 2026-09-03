@@ -98,7 +98,7 @@ func (s OMapSnapshotT) String() string {
 }
 
 type FextNodeEntry struct {
-	Offset interface{}
+	Offset any
 	Key    fext_tree_key_t
 	Val    fext_tree_val_t
 }
@@ -116,7 +116,7 @@ func (f FextNodeEntry) String() string {
 }
 
 type SpacemanFreeQueueNodeEntry struct {
-	Offset interface{}
+	Offset any
 	Key    spaceman_free_queue_key_t
 	Val    spaceman_free_queue_val_t
 }
@@ -134,7 +134,7 @@ func (s SpacemanFreeQueueNodeEntry) String() string {
 }
 
 type OMapNodeEntry struct {
-	Offset interface{}
+	Offset any
 	Key    OMapKey
 	PAddr  uint64
 	OMap   *Obj
@@ -167,11 +167,11 @@ func (one OMapNodeEntry) String() string {
 }
 
 type NodeEntry struct {
-	Offset interface{}
+	Offset any
 	Hdr    JKeyT
-	Key    interface{}
+	Key    any
 	PAddr  uint64
-	Val    interface{}
+	Val    any
 }
 
 func (ne NodeEntry) String() string {

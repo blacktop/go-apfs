@@ -120,7 +120,7 @@ func (o ObjPhysT) GetFlag() objFlag {
 
 type Obj struct {
 	Hdr  ObjPhysT
-	Body interface{}
+	Body any
 }
 
 func (o Obj) String() string {

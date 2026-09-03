@@ -36,7 +36,7 @@ func (k spaceman_free_queue_key_t) String() string {
 type spaceman_free_queue_val_t uint64
 
 func (v spaceman_free_queue_val_t) String() string {
-	return fmt.Sprintf("value=%#x", v)
+	return fmt.Sprintf("value=%#x", uint64(v))
 }
 
 type spaceman_free_queue_entry_t struct {

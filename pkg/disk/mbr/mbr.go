@@ -36,7 +36,7 @@ func (t partType) String() string {
 	case LegacyMBR:
 		return "Legacy MBR (followed by an EFI header)"
 	default:
-		return fmt.Sprintf("%#x", t)
+		return fmt.Sprintf("%#x", uint8(t))
 	}
 }
 

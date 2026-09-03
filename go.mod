@@ -1,11 +1,11 @@
 module github.com/blacktop/go-apfs
 
-go 1.24
+go 1.26
 
 require (
 	github.com/apex/log v1.9.0
 	github.com/blacktop/go-plist v1.0.2
-	github.com/blacktop/lzfse-cgo v1.1.20
+	github.com/blacktop/lzfse-cgo v1.2.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/fatih/color v1.18.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7

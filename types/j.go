@@ -579,7 +579,7 @@ type JXattrKeyT struct {
 type JXattrValT struct {
 	Flags   j_xattr_flags // The extended attribute recordʼs flags.
 	DataLen uint16        // The length of the extended attribute data.
-	Data    interface{}   // The extended attribute data or the identifier of a data stream that contains the data.
+	Data    any           // The extended attribute data or the identifier of a data stream that contains the data.
 } // __attribute__((packed))
 
 func (val JXattrValT) String() string {
