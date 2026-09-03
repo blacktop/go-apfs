@@ -22,3 +22,5 @@ apfs.*
 !apfs.go
 dyld_shared_cache*
 *.dmg
+!testdata/test.dmg
+!testdata/secure.dmg
