@@ -54,11 +54,11 @@ const _omapSnapshotFlag_name = "OMAP_SNAPSHOT_DELETEDOMAP_SNAPSHOT_REVERTED"
 var _omapSnapshotFlag_index = [...]uint8{0, 21, 43}
 
 func (i omapSnapshotFlag) String() string {
-	i -= 1
-	if i >= omapSnapshotFlag(len(_omapSnapshotFlag_index)-1) {
-		return "omapSnapshotFlag(" + strconv.FormatInt(int64(i+1), 10) + ")"
+	idx := int(i) - 1
+	if i < 1 || idx >= len(_omapSnapshotFlag_index)-1 {
+		return "omapSnapshotFlag(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _omapSnapshotFlag_name[_omapSnapshotFlag_index[i]:_omapSnapshotFlag_index[i+1]]
+	return _omapSnapshotFlag_name[_omapSnapshotFlag_index[idx]:_omapSnapshotFlag_index[idx+1]]
 }
 func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
@@ -110,9 +110,9 @@ const _omapReapPhase_name = "OMAP_REAP_PHASE_MAP_TREEOMAP_REAP_PHASE_SNAPSHOT_TR
 var _omapReapPhase_index = [...]uint8{0, 24, 53}
 
 func (i omapReapPhase) String() string {
-	i -= 1
-	if i >= omapReapPhase(len(_omapReapPhase_index)-1) {
-		return "omapReapPhase(" + strconv.FormatInt(int64(i+1), 10) + ")"
+	idx := int(i) - 1
+	if i < 1 || idx >= len(_omapReapPhase_index)-1 {
+		return "omapReapPhase(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _omapReapPhase_name[_omapReapPhase_index[i]:_omapReapPhase_index[i+1]]
+	return _omapReapPhase_name[_omapReapPhase_index[idx]:_omapReapPhase_index[idx+1]]
 }

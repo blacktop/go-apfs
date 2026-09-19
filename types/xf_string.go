@@ -31,11 +31,11 @@ const _xfType_name = "INO_EXT_TYPE_SNAP_XIDINO_EXT_TYPE_DELTA_TREE_OIDINO_EXT_TY
 var _xfType_index = [...]uint16{0, 21, 48, 72, 89, 112, 135, 159, 179, 202, 228, 248, 272, 297, 314, 342, 372}
 
 func (i xfType) String() string {
-	i -= 1
-	if i >= xfType(len(_xfType_index)-1) {
-		return "xfType(" + strconv.FormatInt(int64(i+1), 10) + ")"
+	idx := int(i) - 1
+	if i < 1 || idx >= len(_xfType_index)-1 {
+		return "xfType(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _xfType_name[_xfType_index[i]:_xfType_index[i+1]]
+	return _xfType_name[_xfType_index[idx]:_xfType_index[idx+1]]
 }
 func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.

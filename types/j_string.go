@@ -90,11 +90,11 @@ const _dir_rec_flags_name = "DREC_TYPE_MASKRESERVED_10"
 var _dir_rec_flags_index = [...]uint8{0, 14, 25}
 
 func (i dir_rec_flags) String() string {
-	i -= 15
-	if i >= dir_rec_flags(len(_dir_rec_flags_index)-1) {
-		return "dir_rec_flags(" + strconv.FormatInt(int64(i+15), 10) + ")"
+	idx := int(i) - 15
+	if i < 15 || idx >= len(_dir_rec_flags_index)-1 {
+		return "dir_rec_flags(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _dir_rec_flags_name[_dir_rec_flags_index[i]:_dir_rec_flags_index[i+1]]
+	return _dir_rec_flags_name[_dir_rec_flags_index[idx]:_dir_rec_flags_index[idx+1]]
 }
 func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.

@@ -17,11 +17,11 @@ const _nrFlags_name = "NR_BHM_FLAGNR_CONTINUE"
 var _nrFlags_index = [...]uint8{0, 11, 22}
 
 func (i nrFlags) String() string {
-	i -= 1
-	if i >= nrFlags(len(_nrFlags_index)-1) {
-		return "nrFlags(" + strconv.FormatInt(int64(i+1), 10) + ")"
+	idx := int(i) - 1
+	if i < 1 || idx >= len(_nrFlags_index)-1 {
+		return "nrFlags(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _nrFlags_name[_nrFlags_index[i]:_nrFlags_index[i+1]]
+	return _nrFlags_name[_nrFlags_index[idx]:_nrFlags_index[idx+1]]
 }
 func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.

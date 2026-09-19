@@ -16,11 +16,11 @@ const _j_obj_file_info_type_name = "APFS_FILE_INFO_DATA_HASH"
 var _j_obj_file_info_type_index = [...]uint8{0, 24}
 
 func (i j_obj_file_info_type) String() string {
-	i -= 1
-	if i >= j_obj_file_info_type(len(_j_obj_file_info_type_index)-1) {
-		return "j_obj_file_info_type(" + strconv.FormatInt(int64(i+1), 10) + ")"
+	idx := int(i) - 1
+	if i < 1 || idx >= len(_j_obj_file_info_type_index)-1 {
+		return "j_obj_file_info_type(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _j_obj_file_info_type_name[_j_obj_file_info_type_index[i]:_j_obj_file_info_type_index[i+1]]
+	return _j_obj_file_info_type_name[_j_obj_file_info_type_index[idx]:_j_obj_file_info_type_index[idx+1]]
 }
 func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
@@ -41,8 +41,9 @@ const _apfs_hash_type_t_name = "APFS_HASH_INVALIDAPFS_HASH_SHA256APFS_HASH_SHA51
 var _apfs_hash_type_t_index = [...]uint8{0, 17, 33, 53, 69, 85}
 
 func (i apfs_hash_type_t) String() string {
-	if i >= apfs_hash_type_t(len(_apfs_hash_type_t_index)-1) {
+	idx := int(i) - 0
+	if i < 0 || idx >= len(_apfs_hash_type_t_index)-1 {
 		return "apfs_hash_type_t(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _apfs_hash_type_t_name[_apfs_hash_type_t_index[i]:_apfs_hash_type_t_index[i+1]]
+	return _apfs_hash_type_t_name[_apfs_hash_type_t_index[idx]:_apfs_hash_type_t_index[idx+1]]
 }
