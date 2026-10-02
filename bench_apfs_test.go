@@ -12,12 +12,13 @@ import (
 	"github.com/blacktop/go-apfs/pkg/disk/dmg"
 )
 
-// TestAPFSDMG is the path to an APFS-formatted test DMG (Fork.dmg is HFS+).
+// TestAPFSDMG is the path to an APFS-formatted test DMG. The Fork.dmg fixture
+// used by bench_test.go is HFS+, so APFS benchmarks need their own image.
 // Download with: curl -L -o testdata/Ghostty.dmg https://release.files.ghostty.org/1.3.1/Ghostty.dmg
 const TestAPFSDMG = "testdata/Ghostty.dmg"
 
-// openTestAPFS finds the Apple_APFS partition,
-// dump it to a raw file, and open that with apfs.Open.
+// openTestAPFS dumps the Apple_APFS partition to a raw file and opens that,
+// so the benchmark measures APFS traversal without DMG decompression.
 func openTestAPFS(b *testing.B) *apfs.APFS {
 	if _, err := os.Stat(TestAPFSDMG); os.IsNotExist(err) {
 		b.Skipf("test DMG not found at %s", TestAPFSDMG)
@@ -56,9 +57,9 @@ func openTestAPFS(b *testing.B) *apfs.APFS {
 	return fs
 }
 
-// BenchmarkAPFSCopy measures a full extraction of the app bundle, the
-// slowest path for app-bundle DMGs. Each file copied does a per-file
-// B-tree lookup via GetFSRecordsForOid.
+// BenchmarkAPFSCopy measures a full extraction of the app bundle. It
+// exercises the per-file record lookups in copyFile, which is what the
+// B-tree node cache targets.
 func BenchmarkAPFSCopy(b *testing.B) {
 	fs := openTestAPFS(b)
 	volName := strings.TrimRight(string(fs.Volume.VolumeName[:]), "\x00")

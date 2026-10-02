@@ -8,6 +8,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"math"
+	"os"
+	"strings"
+	"unicode/utf16"
+
 	"github.com/apex/log"
 	"github.com/blacktop/go-apfs/pkg/adc"
 	"github.com/blacktop/go-apfs/pkg/disk/gpt"
@@ -19,11 +25,6 @@ import (
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 	"github.com/xi2/xz"
-	"io"
-	"math"
-	"os"
-	"strings"
-	"unicode/utf16"
 )
 
 // xzMagic is the 6-byte header for XZ streams (\xFD7zXZ\x00).
@@ -31,6 +32,10 @@ import (
 // so we sniff the magic to pick the right decompressor.
 var xzMagic = []byte{0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00}
 
+// newLZMAReader caps the decoder dictionary so a crafted header cannot force
+// a multi-gigabyte allocation before any data is read. XZ streams go through
+// xi2/xz because ulikunitz/xz treats DictCap as a limit only for raw LZMA1;
+// for LZMA2 blocks it grows the capacity to whatever the block header declares.
 func newLZMAReader(data []byte) (io.Reader, error) {
 	if len(data) >= 6 && bytes.Equal(data[:6], xzMagic) {
 		return xz.NewReader(bytes.NewReader(data), maxLZMADictionary)
@@ -41,7 +46,8 @@ func newLZMAReader(data []byte) (io.Reader, error) {
 const (
 	sectorSize    = 0x200
 	zeroBlockSize = 32 << 10
-	// ponytail: buffered chunks above 64 MiB are unsupported; stream decoding before raising this ceiling.
+	// Chunks are decoded into memory in full, so this ceiling bounds the
+	// allocation per chunk. Raising it requires streaming decode.
 	maxDecodedChunkSize    = 64 << 20
 	maxCompressedChunkSize = 64 << 20
 	maxLZMADictionary      = xz.DefaultDictMax

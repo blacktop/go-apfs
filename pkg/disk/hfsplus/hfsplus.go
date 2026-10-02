@@ -16,12 +16,9 @@ type HFSPlus struct {
 	volumeHdr VolumeHeader
 
 	device io.ReaderAt
-	closer io.Closer // Add this field to track closeable resources
+	closer io.Closer
 
-	// Cache commonly accessed structures
 	catalogBTree *BTree
-	extentsBTree *BTree
-	startupBTree *BTree
 }
 
 // Open creates a new HFSPlus instance from a file path
@@ -64,10 +61,13 @@ func New(device io.ReaderAt) (*HFSPlus, error) {
 		return nil, fmt.Errorf("invalid HFS+ signature: %x", fs.volumeHdr.Signature)
 	}
 
-	// Initialize B-trees
-	if err := fs.initBTrees(); err != nil {
-		return nil, err
+	// Only the catalog tree is parsed. The extents overflow, attributes and
+	// startup trees are skipped because nothing in this package reads them.
+	catalog, err := fs.readBTree(fs.volumeHdr.CatalogFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read catalog B-tree: %v", err)
 	}
+	fs.catalogBTree = catalog
 
 	return fs, nil
 }
@@ -186,141 +186,6 @@ func (fs *HFSPlus) buildFileList(folderID CatalogNodeID, allFiles map[CatalogNod
 	return nil
 }
 
-func (fs *HFSPlus) listFilesInNodeWithVisited(node *BTNode, folderID CatalogNodeID, currentPath string, files *[]*FileRecord, visited map[CatalogNodeID]bool, callCount *int) error {
-	// Prevent infinite recursion by tracking visited folders
-	if visited[folderID] {
-		return nil
-	}
-	visited[folderID] = true
-
-	// Limit total files to prevent hanging on corrupted filesystems
-	if len(*files) > 100000 {
-		return fmt.Errorf("file limit exceeded (possible filesystem corruption)")
-	}
-
-	return fs.listFilesInNodeInternal(node, folderID, currentPath, files, visited, callCount)
-}
-
-func (fs *HFSPlus) listFilesInNode(node *BTNode, folderID CatalogNodeID, currentPath string, files *[]*FileRecord) error {
-	// This is kept for backward compatibility but should use visited tracking
-	visited := make(map[CatalogNodeID]bool)
-	callCount := 0
-	return fs.listFilesInNodeInternal(node, folderID, currentPath, files, visited, &callCount)
-}
-
-func (fs *HFSPlus) listFilesInNodeInternal(node *BTNode, folderID CatalogNodeID, currentPath string, files *[]*FileRecord, visited map[CatalogNodeID]bool, callCount *int) error {
-	// Increment call counter and check for infinite loops
-	*callCount++
-
-	// Detect infinite loops - if we've made too many calls, bail out
-	if *callCount > 100000 {
-		return fmt.Errorf("call count exceeded (possible infinite loop), made %d calls", *callCount)
-	}
-
-	// Log progress every 1000 calls
-	if *callCount%1000 == 0 {
-		fmt.Fprintf(os.Stderr, "  Made %d calls, found %d files, visited %d folders...\n", *callCount, len(*files), len(visited))
-	}
-
-	// Progress logging every 500 files
-	if len(*files)%500 == 0 && len(*files) > 0 {
-		fmt.Fprintf(os.Stderr, "  Listed %d files so far...\n", len(*files))
-	}
-
-	// Handle different node types
-	switch node.Descriptor.Kind {
-	case BTIndexNodeKind:
-		// For index nodes, recursively traverse child nodes that could contain our folder
-		for _, record := range node.Records {
-			if catalogRecord, ok := record.(*CatalogRecord); ok {
-				// Check if this branch could contain our folder
-				if catalogRecord.Key.ParentID <= folderID {
-					// Get child node offset
-					childOffset := fs.getNodeOffset(catalogRecord.Link, int(fs.catalogBTree.BTHeaderNode.Header.NodeSize))
-
-					// Read child node
-					childNode, err := fs.readBTreeNodeAtOffset(childOffset, int(fs.catalogBTree.BTHeaderNode.Header.NodeSize), fs.volumeHdr.CatalogFile)
-					if err != nil {
-						return fmt.Errorf("failed to read child node: %v", err)
-					}
-
-					// Recursively process child node
-					if err := fs.listFilesInNodeInternal(childNode, folderID, currentPath, files, visited, callCount); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-	case BTLeafNodeKind:
-		// For leaf nodes, process file and folder records for the current folder.
-		for _, record := range node.Records {
-			switch r := record.(type) {
-			case *FileRecord:
-				if r.Key.ParentID == folderID {
-					fileName := r.Key.NodeName.String()
-					var filePath string
-					if currentPath == "" {
-						filePath = "/" + fileName
-					} else {
-						filePath = filepath.Join(currentPath, fileName)
-					}
-					r.path = filePath
-					r.r = &fs.device
-					r.blkSize = fs.volumeHdr.BlockSize
-					*files = append(*files, r)
-				}
-			case *FolderRecord:
-				if r.Key.ParentID == folderID {
-					folderName := r.Key.NodeName.String()
-					var newPath string
-					if currentPath == "" {
-						newPath = "/" + folderName
-					} else {
-						newPath = filepath.Join(currentPath, folderName)
-					}
-					// Recursively process the subfolder's own files.
-					subFolderID := r.FolderInfo.FolderID
-
-					// Recursively process subfolder through the wrapper to properly track visits and calls
-					if err := fs.listFilesInNodeWithVisited(fs.catalogBTree.Root, subFolderID, newPath, files, visited, callCount); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// initBTrees initializes the catalog, extents, attributes and startup B-trees
-func (fs *HFSPlus) initBTrees() (err error) {
-	// Initialize catalog B-tree
-	fs.catalogBTree, err = fs.readBTree(fs.volumeHdr.CatalogFile)
-	if err != nil {
-		return fmt.Errorf("failed to read catalog B-tree: %v", err)
-	}
-
-	if fs.volumeHdr.ExtentsFile.LogicalSize > 0 {
-		// Initialize extents B-tree
-		fs.extentsBTree, err = fs.readBTree(fs.volumeHdr.ExtentsFile)
-		if err != nil {
-			return fmt.Errorf("failed to read extents B-tree: %v", err)
-		}
-	}
-
-	if fs.volumeHdr.StartupFile.LogicalSize > 0 {
-		// Initialize startup B-tree
-		fs.startupBTree, err = fs.readBTree(fs.volumeHdr.StartupFile)
-		if err != nil {
-			return fmt.Errorf("failed to read startup B-tree: %v", err)
-		}
-	}
-
-	return nil
-}
-
 // readBTree reads an HFS+ B-tree from the fork data following TN1150.
 func (fs *HFSPlus) readBTree(forkData ForkData) (btree *BTree, err error) {
 	// The B-tree fork begins at the first extent.
@@ -358,10 +223,10 @@ func (fs *HFSPlus) readBTree(forkData ForkData) (btree *BTree, err error) {
 	return btree, nil
 }
 
-func (fs *HFSPlus) getNodeOffset(link uint32, nodeSize int) int64 {
+func (fs *HFSPlus) getNodeOffset(link uint32, nodeSize int, forkData ForkData) int64 {
 	localBlock := int64(nodeSize) * int64(link) / int64(fs.volumeHdr.BlockSize)
 	driveBlock := int64(0) // Find the extent containing this block
-	for _, extent := range fs.volumeHdr.CatalogFile.Extents {
+	for _, extent := range forkData.Extents {
 		if localBlock < int64(extent.BlockCount) {
 			driveBlock = int64(extent.StartBlock) + localBlock
 			break
@@ -400,7 +265,6 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 	offsets := make([]int64, node.Descriptor.NumRecords)
 	for i, detla := range deltas {
 		offsets[i] = offset + int64(detla)
-		// fmt.Printf("record offset: %x\n", offsets[i])
 	}
 
 	for _, offset := range offsets {
@@ -411,7 +275,7 @@ func (fs *HFSPlus) readBTreeNodeAtOffset(offset int64, nodeSize int, forkData Fo
 			if err := record.Unmarshal(sr); err != nil {
 				return nil, fmt.Errorf("failed to read record: %v", err)
 			}
-			childOffset := fs.getNodeOffset(record.(*CatalogRecord).Link, nodeSize)
+			childOffset := fs.getNodeOffset(record.(*CatalogRecord).Link, nodeSize, forkData)
 			child, err := fs.readBTreeNodeAtOffset(childOffset, nodeSize, forkData)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read child node: %v", err)

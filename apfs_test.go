@@ -3,13 +3,14 @@ package apfs
 import (
 	"bytes"
 	"fmt"
-	"github.com/blacktop/go-apfs/pkg/disk"
-	"github.com/blacktop/go-apfs/types"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/blacktop/go-apfs/pkg/disk"
+	"github.com/blacktop/go-apfs/types"
 )
 
 const copyTestData = "extracted contents"
@@ -55,6 +56,12 @@ func copyTestLink(oid uint64, target string) types.NodeEntry {
 	}
 }
 
+// copyTestFile returns the directory record, inode and extent of a regular
+// file named name with id oid inside directory parent.
+func copyTestFile(parent, oid uint64, name string) []types.NodeEntry {
+	return []types.NodeEntry{copyTestEntry(parent, oid, name, false), copyTestInode(oid, name), copyTestExtent(oid)}
+}
+
 func copyTestFS(records ...types.NodeEntry) *APFS {
 	records = append(records, copyTestEntry(types.FSROOT_OID, 10, "source", true))
 	slices.SortStableFunc(records, func(a, b types.NodeEntry) int {
@@ -81,13 +88,14 @@ func TestCopyRejectsUnsafeNames(t *testing.T) {
 		for _, branch := range []string{"directory", "nested directory", "file inode", "file entry"} {
 			t.Run(fmt.Sprintf("%s/%q", branch, name), func(t *testing.T) {
 				var records []types.NodeEntry
-				want := fmt.Sprintf("unsafe directory record name %q", name)
+				var want string
 				switch branch {
 				case "directory":
 					records = []types.NodeEntry{copyTestEntry(10, 20, name, true)}
+					want = fmt.Sprintf("unsafe directory record name %q in .", name)
 				case "nested directory":
 					records = []types.NodeEntry{copyTestEntry(10, 20, "nested", true), copyTestEntry(20, 30, name, true)}
-					want += " in nested"
+					want = fmt.Sprintf("unsafe directory record name %q in nested", name)
 				case "file inode":
 					records = []types.NodeEntry{copyTestEntry(10, 20, "file", false), copyTestInode(20, name)}
 					want = fmt.Sprintf("unsafe file record name %q in .", name)
@@ -234,7 +242,7 @@ func TestCopyFileConfinesParentSymlink(t *testing.T) {
 	t.Cleanup(func() { root.Close() })
 	entry := copyTestEntry(10, 20, "file", false)
 	fs := copyTestFS(entry, copyTestInode(20, "file"), copyTestExtent(20))
-	// Check file creation independently of copyDir's earlier directory check.
+	// Check file creation independently of copyEntries' earlier name check.
 	err = fs.copyFile(root, entry, "escape")
 	if err == nil || !strings.Contains(err.Error(), "path escapes from parent") {
 		t.Fatalf("copyFile error = %v, want root escape error", err)
@@ -245,14 +253,55 @@ func TestCopyFileConfinesParentSymlink(t *testing.T) {
 	}
 }
 
-func TestCopyCreatesDirectoryDestination(t *testing.T) {
-	fs := copyTestFS(copyTestEntry(10, 20, "nested", true), copyTestEntry(20, 30, "file", false), copyTestInode(30, "file"), copyTestExtent(30))
-	dest := filepath.Join(t.TempDir(), "new", "destination")
+func TestCopyDestinations(t *testing.T) {
+	nested := append([]types.NodeEntry{copyTestEntry(10, 20, "nested", true)}, copyTestFile(20, 30, "file")...)
+	for _, tc := range []struct {
+		name, src, dest, want string
+		records               []types.NodeEntry
+	}{
+		{"directory into missing destination", "/source", "new/destination", "nested/file", nested},
+		{"file into missing destination", "/source/file", "new", "file", copyTestFile(10, 20, "file")},
+		{"volume root", "/", ".", "source/file", copyTestFile(10, 20, "file")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dest := filepath.Join(t.TempDir(), tc.dest)
+			if err := copyTestFS(tc.records...).Copy(tc.src, dest); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(filepath.Join(dest, tc.want))
+			if err != nil || string(got) != copyTestData {
+				t.Fatalf("%s = %q, error = %v", tc.want, got, err)
+			}
+		})
+	}
+}
+
+func TestCopyEmptyDirectoryCreatesDestination(t *testing.T) {
+	fs := copyTestFS()
+	dest := filepath.Join(t.TempDir(), "empty")
 	if err := fs.Copy("/source", dest); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(dest, "nested", "file"))
-	if err != nil || string(got) != copyTestData {
-		t.Fatalf("file = %q, error = %v", got, err)
+	entries, err := os.ReadDir(dest)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("entries = %v, error = %v", entries, err)
+	}
+}
+
+func TestFindRejectsFileAsDirectory(t *testing.T) {
+	fs := copyTestFS(copyTestEntry(10, 20, "file", false))
+	_, err := fs.find("/source/file/child")
+	if err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("find error = %v, want not a directory", err)
+	}
+}
+
+func TestCopyRejectsShortFile(t *testing.T) {
+	short := copyTestExtent(20)
+	short.Val = types.JFileExtentValT{LenAndFlags: uint64(len(copyTestData) - 1)}
+	fs := copyTestFS(copyTestEntry(10, 20, "file", false), copyTestInode(20, "file"), short)
+	err := fs.Copy("/source", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "expected") {
+		t.Fatalf("Copy error = %v, want size mismatch", err)
 	}
 }

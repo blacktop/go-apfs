@@ -162,9 +162,11 @@ type BTreeNodePhys struct {
 
 	// nodeCache caches decoded child nodes by physical block address so
 	// repeated traversals skip re-reading, re-verifying, and re-decoding
-	// the same nodes. Optional: nil disables caching. Per-mount, set on
-	// the FS omap root by NewAPFS; assumes the backing device is immutable.
-	nodeCache *lru.Cache[uint64, *Obj]
+	// the same nodes. nil disables caching. It belongs to the root node it
+	// was enabled on; copies of the root made elsewhere do not share it.
+	// Cached nodes are never mutated, so concurrent readers are safe.
+	// Assumes the backing device is immutable.
+	nodeCache *lru.Cache[uint64, BTreeNodePhys]
 
 	block
 }
@@ -865,31 +867,34 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 	return nil
 }
 
-// readObjCached returns a verified object for blockAddr, consulting the
-// per-mount node cache when set so repeated traversals skip the read,
-// checksum, and per-entry decode. Falls back to ReadObj when no cache.
-func (n *BTreeNodePhys) readObjCached(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
+// readNodeCached returns the verified B-tree node at blockAddr, consulting
+// the node cache when one is enabled.
+func (n *BTreeNodePhys) readNodeCached(r io.ReaderAt, blockAddr uint64) (BTreeNodePhys, error) {
 	if n.nodeCache != nil {
-		if o, ok := n.nodeCache.Get(blockAddr); ok {
-			return o, nil
+		if node, ok := n.nodeCache.Get(blockAddr); ok {
+			return node, nil
 		}
 	}
 	o, err := ReadObj(r, blockAddr)
 	if err != nil {
-		return nil, err
+		return BTreeNodePhys{}, fmt.Errorf("failed to read B-tree node at %#x: %w", blockAddr, err)
+	}
+	node, ok := o.Body.(BTreeNodePhys)
+	if !ok {
+		return BTreeNodePhys{}, fmt.Errorf("object at %#x is %T, not a B-tree node", blockAddr, o.Body)
 	}
 	if n.nodeCache != nil {
-		n.nodeCache.Add(blockAddr, o)
+		n.nodeCache.Add(blockAddr, node)
 	}
-	return o, nil
+	return node, nil
 }
 
 // EnableNodeCache attaches a bounded LRU cache of decoded B-tree nodes keyed by
 // physical block address to this node. GetFSRecordsForOid and GetOMapEntry
-// consult it so repeated traversals reuse decoded nodes. Intended to be called
-// once on the FS omap root after mounting; assumes an immutable device.
+// consult it on every level of their traversal. Call it once on the FS omap
+// root after mounting. size must be positive.
 func (n *BTreeNodePhys) EnableNodeCache(size int) error {
-	c, err := lru.New[uint64, *Obj](size)
+	c, err := lru.New[uint64, BTreeNodePhys](size)
 	if err != nil {
 		return err
 	}
@@ -900,7 +905,6 @@ func (n *BTreeNodePhys) EnableNodeCache(size int) error {
 // GetOMapEntry returns the omap entry for a given oid
 func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMapNodeEntry, error) {
 
-	var entIdx int
 	var tocEntry OMapNodeEntry
 
 	node := n
@@ -926,13 +930,30 @@ func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMa
 			}
 			return &tocEntry, nil
 		}
-		// get child
-		if o, err := n.readObjCached(r, uint64(tocEntry.PAddr)); err != nil {
-			return nil, fmt.Errorf("failed to read child node of entry %d", entIdx)
-		} else if child, ok := o.Body.(BTreeNodePhys); ok {
-			node = &child
+		child, err := n.readNodeCached(r, uint64(tocEntry.PAddr))
+		if err != nil {
+			return nil, fmt.Errorf("failed to read omap child: %w", err)
 		}
+		node = &child
 	}
+}
+
+// readChildNode resolves an FS-tree index entry (whose value is a virtual
+// OID) through the omap and returns the decoded child node.
+func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid XidT) (BTreeNodePhys, error) {
+	childOid, ok := entry.Val.(uint64)
+	if !ok {
+		return BTreeNodePhys{}, fmt.Errorf("index entry value is %T, not a child oid", entry.Val)
+	}
+	omapEntry, err := n.GetOMapEntry(r, OidT(childOid), maxXid)
+	if err != nil {
+		return BTreeNodePhys{}, fmt.Errorf("failed to get omap entry for oid %#x: %w", childOid, err)
+	}
+	child, err := n.readNodeCached(r, omapEntry.Val.Paddr)
+	if err != nil {
+		return BTreeNodePhys{}, fmt.Errorf("failed to read child of oid %#x: %w", childOid, err)
+	}
+	return child, nil
 }
 
 // GetFSRecordsForOid returns an array of all the file-system records with a given Virtual OID from a given file-system root tree.
@@ -940,6 +961,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 
 	var records FSRecords
 	var tocEntry NodeEntry
+	var err error
 
 	treeHeight := volFsRootNode.Level + 1
 	descPath := make([]uint32, treeHeight)
@@ -1035,16 +1057,9 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 			descPath[i] = node.Nkeys - 1
 		}
 
-		// get child node
-		childNodeOmapEntry, err := n.GetOMapEntry(r, OidT(tocEntry.Val.(uint64)), maxXid)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get omap entry for oid %#x: %v", tocEntry.Val.(uint64), err)
+		if node, err = n.readChildNode(r, tocEntry, maxXid); err != nil {
+			return nil, err
 		}
-		nodeObj, err := n.readObjCached(r, childNodeOmapEntry.Val.Paddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read child node: %v", err)
-		}
-		node = nodeObj.Body.(BTreeNodePhys)
 	}
 
 	for {
@@ -1112,16 +1127,9 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 
 			tocEntry = node.Entries[descPath[i]].(NodeEntry)
 
-			// get child node
-			childNodeOmapEntry, err := n.GetOMapEntry(r, OidT(tocEntry.Val.(uint64)), maxXid)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get omap entry for oid %#x: %v", tocEntry.Val.(uint64), err)
+			if node, err = n.readChildNode(r, tocEntry, maxXid); err != nil {
+				return nil, err
 			}
-			nodeObj, err := n.readObjCached(r, childNodeOmapEntry.Val.Paddr)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read child node: %v", err)
-			}
-			node = nodeObj.Body.(BTreeNodePhys)
 		}
 	}
 }

@@ -6,17 +6,19 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/apex/log"
-	"github.com/blacktop/go-apfs/pkg/disk"
-	"github.com/blacktop/go-apfs/types"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/apex/log"
+	"github.com/blacktop/go-apfs/pkg/disk"
+	"github.com/blacktop/go-apfs/types"
 )
 
 // fsNodeCacheSize bounds the LRU of decoded B-tree nodes attached to the FS
-// omap root; 4096 nodes covers the working set of a typical app bundle.
+// omap root: 4096 nodes is 16 MiB of 4 KiB blocks, a ceiling chosen to be
+// generous rather than measured.
 const fsNodeCacheSize = 4096
 
 // APFS apple file system object
@@ -139,7 +141,9 @@ func NewAPFS(dev disk.Device) (*APFS, error) {
 
 	if ombtree, ok := a.Volume.OMap.Body.(types.OMap).Tree.Body.(types.BTreeNodePhys); ok {
 		a.fsOMapBtree = &ombtree
-		_ = a.fsOMapBtree.EnableNodeCache(fsNodeCacheSize)
+		if err := a.fsOMapBtree.EnableNodeCache(fsNodeCacheSize); err != nil {
+			return nil, fmt.Errorf("failed to enable fs omap node cache: %w", err)
+		}
 	}
 
 	fsRootEntry, err := a.fsOMapBtree.GetOMapEntry(a.r, a.Volume.RootTreeOid, a.volume.Hdr.Xid)
@@ -270,7 +274,6 @@ func (a *APFS) Cat(path string) error {
 			case types.APFS_TYPE_INODE:
 				if rec.Val.(types.JInodeVal).InternalFlags&types.INODE_HAS_UNCOMPRESSED_SIZE != 0 {
 					compressed = true
-					// uncompressedSize = rec.Val.(types.JInodeVal).UncompressedSize
 				}
 				for _, xf := range rec.Val.(types.JInodeVal).Xfields {
 					switch xf.XType {
@@ -292,13 +295,10 @@ func (a *APFS) Cat(path string) error {
 					if rec.Val.(types.JXattrValT).Flags.DataEmbedded() {
 						binary.Read(bytes.NewReader(rec.Val.(types.JXattrValT).Data.([]byte)), binary.LittleEndian, &decmpfsHdr)
 					} else if rec.Val.(types.JXattrValT).Flags.DataStream() {
-						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(
-							sr,
-							a.FSRootBtree,
-							types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID),
-							types.XidT(^uint64(0)))
+						xattrOid := types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID)
+						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, xattrOid, types.XidT(^uint64(0)))
 						if err != nil {
-							return fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), err)
+							return fmt.Errorf("failed to get fs records for oid %#x: %v", xattrOid, err)
 						}
 						for _, rec := range fsRecords {
 							switch rec.Hdr.GetType() {
@@ -447,21 +447,7 @@ func (a *APFS) Tree(path string) error {
 
 	sr := a.r
 
-	fsOMapBtree := a.Volume.OMap.Body.(types.OMap).Tree.Body.(types.BTreeNodePhys)
-
-	fsRootEntry, err := fsOMapBtree.GetOMapEntry(sr, a.Volume.RootTreeOid, a.volume.Hdr.Xid)
-	if err != nil {
-		return err
-	}
-
-	fsRootBtreeObj, err := types.ReadObj(sr, fsRootEntry.Val.Paddr)
-	if err != nil {
-		return err
-	}
-
-	fsRootBtree := fsRootBtreeObj.Body.(types.BTreeNodePhys)
-
-	fsRecords, err := fsOMapBtree.GetFSRecordsForOid(sr, fsRootBtree, types.OidT(types.FSROOT_OID), types.XidT(^uint64(0)))
+	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(types.FSROOT_OID), types.XidT(^uint64(0)))
 	if err != nil {
 		return err
 	}
@@ -474,7 +460,7 @@ func (a *APFS) Tree(path string) error {
 				switch rec.Hdr.GetType() {
 				case types.APFS_TYPE_DIR_REC:
 					if rec.Key.(types.JDrecHashedKeyT).Name == part {
-						fsRecords, err = fsOMapBtree.GetFSRecordsForOid(sr, fsRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
+						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 						if err != nil {
 							return err
 						}
@@ -482,17 +468,6 @@ func (a *APFS) Tree(path string) error {
 					} else {
 						fstree.Add(rec.Key.(types.JDrecHashedKeyT).Name)
 					}
-				// case types.APFS_TYPE_INODE:
-				// 	for _, xf := range rec.Val.(j_inode_val).Xfields {
-				// 		if xf.XType == INO_EXT_TYPE_NAME {
-				// 			if xf.Field.(string) == "root" {
-				// 				t = NewFSTree("/")
-				// 			} else {
-				// 				t = NewFSTree(xf.Field.(string))
-				// 				}
-				// 			}
-				// 		}
-				// 	}
 				default:
 					log.Warnf("found fs record type %s", rec.Hdr.GetType())
 				}
@@ -511,14 +486,9 @@ func (a *APFS) Copy(src, dest string) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to find %s: %v", src, err)
 	}
-	if len(entries) == 0 {
-		return nil
-	}
-	// Directory extraction has historically created a missing destination.
-	if entries[0].Val.(types.JDrecVal).Flags == types.DT_DIR {
-		if err := os.MkdirAll(dest, 0755); err != nil {
-			return fmt.Errorf("failed to create destination %s: %w", dest, err)
-		}
+	// dest is always a directory: a file is extracted into it under its own name.
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		return fmt.Errorf("failed to create destination %s: %w", dest, err)
 	}
 	root, err := os.OpenRoot(dest)
 	if err != nil {
@@ -526,29 +496,7 @@ func (a *APFS) Copy(src, dest string) (err error) {
 	}
 	defer root.Close()
 
-	for _, entry := range entries {
-		if entry.Val.(types.JDrecVal).Flags == types.DT_DIR {
-			dirName := entry.Key.(types.JDrecHashedKeyT).Name
-			subDir, ok := safeJoinPath(".", dirName)
-			if !ok {
-				return fmt.Errorf("unsafe directory record name %q", dirName)
-			}
-			if err := root.MkdirAll(subDir, 0755); err != nil {
-				return fmt.Errorf("failed to create directory %s: %v", subDir, err)
-			}
-			// Recurse by directory OID instead of re-resolving the path.
-			if err := a.copyDir(root, uint64(entry.Val.(types.JDrecVal).FileID), subDir); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := a.copyFile(root, entry, "."); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return a.copyEntries(root, entries, ".")
 }
 
 // safeJoinPath accepts one record name. Filesystem operations must still use
@@ -560,47 +508,44 @@ func safeJoinPath(dest, name string) (string, bool) {
 	return filepath.Join(dest, name), true
 }
 
-// copyDir copies the contents of directory oid into dest, recursing by
-// child FileID so a deep tree needs one B-tree lookup per directory.
-func (a *APFS) copyDir(root *os.Root, oid uint64, dest string) error {
-	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, types.OidT(oid), types.XidT(^uint64(0)))
-	if err != nil {
-		return fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(oid), err)
-	}
-
-	for _, rec := range fsRecords {
-		if rec.Hdr.GetType() != types.APFS_TYPE_DIR_REC {
+// copyEntries extracts directory records into dest, a path relative to root.
+// Subdirectories recurse by FileID, so each is listed with one lookup instead
+// of re-resolving its full path from the volume root.
+func (a *APFS) copyEntries(root *os.Root, entries []types.NodeEntry, dest string) error {
+	for _, entry := range entries {
+		if entry.Hdr.GetType() != types.APFS_TYPE_DIR_REC {
 			continue
 		}
-		val := rec.Val.(types.JDrecVal)
-		switch val.Flags {
-		case types.DT_DIR:
-			dirName := rec.Key.(types.JDrecHashedKeyT).Name
-			subDir, ok := safeJoinPath(dest, dirName)
-			if !ok {
-				return fmt.Errorf("unsafe directory record name %q in %s", dirName, dest)
+		val := entry.Val.(types.JDrecVal)
+		name := entry.Key.(types.JDrecHashedKeyT).Name
+		if val.Flags != types.DT_DIR {
+			if _, ok := safeJoinPath(dest, name); !ok {
+				return fmt.Errorf("unsafe file record name %q in %s", name, dest)
 			}
-			if err := root.MkdirAll(subDir, 0755); err != nil {
-				return fmt.Errorf("failed to create directory %s: %v", subDir, err)
-			}
-			if err := a.copyDir(root, uint64(val.FileID), subDir); err != nil {
+			if err := a.copyFile(root, entry, dest); err != nil {
 				return err
 			}
-		default:
-			if err := a.copyFile(root, rec, dest); err != nil {
-				return err
-			}
+			continue
+		}
+		path, ok := safeJoinPath(dest, name)
+		if !ok {
+			return fmt.Errorf("unsafe directory record name %q in %s", name, dest)
+		}
+		if err := root.MkdirAll(path, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %v", path, err)
+		}
+		children, err := a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, types.OidT(val.FileID), types.XidT(^uint64(0)))
+		if err != nil {
+			return fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(val.FileID), err)
+		}
+		if err := a.copyEntries(root, children, path); err != nil {
+			return err
 		}
 	}
-
 	return nil
 }
 
 func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
-	name := rec.Key.(types.JDrecHashedKeyT).Name
-	if _, ok := safeJoinPath(dest, name); !ok {
-		return fmt.Errorf("unsafe file record name %q in %s", name, dest)
-	}
 	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
 	if err != nil {
 		return fmt.Errorf("failed to get fs records: %v", err)
@@ -647,13 +592,10 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 						return fmt.Errorf("failed to read embedded decmpfs header: %v", err)
 					}
 				} else if rec.Val.(types.JXattrValT).Flags.DataStream() {
-					xattrRecords, err := a.fsOMapBtree.GetFSRecordsForOid(
-						a.r,
-						a.FSRootBtree,
-						types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID),
-						types.XidT(^uint64(0)))
+					xattrOid := types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID)
+					xattrRecords, err := a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, xattrOid, types.XidT(^uint64(0)))
 					if err != nil {
-						return fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JXattrValT).Data.(uint64)), err)
+						return fmt.Errorf("failed to get fs records for oid %#x: %v", xattrOid, err)
 					}
 					for _, xrec := range xattrRecords {
 						switch xrec.Hdr.GetType() {
@@ -700,53 +642,50 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 	}
 	defer fo.Close()
 
+	expectedSize := totalBytesWritten
+	if compressed && decmpfsHdr == nil {
+		return fmt.Errorf("missing decmpfs header for compressed file %s", outPath)
+	}
+	w := bufio.NewWriter(fo)
 	if compressed {
-		if decmpfsHdr == nil {
-			return fmt.Errorf("missing decmpfs header for compressed file %s", outPath)
-		}
-		w := bufio.NewWriter(fo)
 		if err := decmpfsHdr.DecompressFile(a.r, w, fexts, false); err != nil {
 			return fmt.Errorf("failed to decompress and write %s: %v", outPath, err)
 		}
-		w.Flush()
-
-		if info, err := fo.Stat(); err == nil {
-			if info.Size() != int64(uncompressedSize) {
-				log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), uncompressedSize)
-			}
-		}
-		log.Debugf("Created %s", outPath)
+		expectedSize = uncompressedSize
 	} else {
-		bw := bufio.NewWriter(fo)
 		remaining := int64(totalBytesWritten)
 		for _, fext := range fexts {
 			if remaining <= 0 {
 				break
 			}
 			extentBytes := min(int64(fext.Length), remaining)
-			if err := a.dev.ReadFile(bw, int64(fext.Block*types.BLOCK_SIZE), extentBytes); err != nil {
+			if err := a.dev.ReadFile(w, int64(fext.Block*types.BLOCK_SIZE), extentBytes); err != nil {
 				return fmt.Errorf("failed to write file data from device: %v", err)
 			}
 			remaining -= extentBytes
 		}
-		if err := bw.Flush(); err != nil {
-			return fmt.Errorf("failed to flush %s: %v", outPath, err)
-		}
-		if info, err := fo.Stat(); err == nil {
-			if info.Size() != int64(totalBytesWritten) {
-				log.Errorf("final file size %d did NOT match expected size of %d", info.Size(), totalBytesWritten)
-			}
-		}
-		log.Debugf("Created %s", outPath)
 	}
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("failed to flush %s: %w", outPath, err)
+	}
+	info, err := fo.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", outPath, err)
+	}
+	if info.Size() != int64(expectedSize) {
+		return fmt.Errorf("%s: wrote %d bytes, expected %d", outPath, info.Size(), expectedSize)
+	}
+	if err := fo.Close(); err != nil {
+		return fmt.Errorf("failed to close %s: %w", outPath, err)
+	}
+	log.Debugf("Created %s", outPath)
 
 	return nil
 }
 
+// find resolves path to its directory records. A file or symlink resolves to
+// its own record; a directory resolves to the records of its children.
 func (a *APFS) find(path string) ([]types.NodeEntry, error) {
-
-	var files []types.NodeEntry
-
 	fsRecords, err := a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, types.OidT(types.FSROOT_OID), types.XidT(^uint64(0)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get fs records for FSROOT_OID: %v", err)
@@ -757,35 +696,44 @@ func (a *APFS) find(path string) ([]types.NodeEntry, error) {
 	})
 
 	for idx, part := range parts {
-		if len(part) > 0 {
-			for _, rec := range fsRecords {
-				switch rec.Hdr.GetType() {
-				case types.APFS_TYPE_DIR_REC:
-					if rec.Key.(types.JDrecHashedKeyT).Name == part {
-						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, types.OidT(rec.Val.(types.JDrecVal).FileID), types.XidT(^uint64(0)))
-						if err != nil {
-							return nil, fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(rec.Val.(types.JDrecVal).FileID), err)
-						}
-						if idx == len(parts)-1 { // last part
-							switch rec.Val.(types.JDrecVal).Flags {
-							case types.DT_REG, types.DT_LNK:
-								return append(files, rec), nil
-							case types.DT_DIR:
-								// fsRecords already holds this directory's child records
-								// from the lookup above; return them directly.
-								for _, dirRec := range fsRecords {
-									if dirRec.Hdr.GetType() == types.APFS_TYPE_DIR_REC {
-										files = append(files, dirRec)
-									}
-								}
-								return files, nil
-							}
-						}
-					}
-				}
+		match, ok := findDirRec(fsRecords, part)
+		if !ok {
+			return nil, fmt.Errorf("did not find file %s", path)
+		}
+		val := match.Val.(types.JDrecVal)
+		switch val.Flags {
+		case types.DT_DIR:
+			fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, types.OidT(val.FileID), types.XidT(^uint64(0)))
+			if err != nil {
+				return nil, fmt.Errorf("failed to get fs records for oid %#x: %v", types.OidT(val.FileID), err)
 			}
+		case types.DT_REG, types.DT_LNK:
+			if idx < len(parts)-1 {
+				return nil, fmt.Errorf("%s is not a directory", part)
+			}
+			return []types.NodeEntry{match}, nil
+		default:
+			return nil, fmt.Errorf("%s has unsupported type %s", part, val.Flags)
 		}
 	}
 
-	return nil, fmt.Errorf("did not find file %s", path)
+	var children []types.NodeEntry
+	for _, rec := range fsRecords {
+		if rec.Hdr.GetType() == types.APFS_TYPE_DIR_REC {
+			children = append(children, rec)
+		}
+	}
+	return children, nil
+}
+
+func findDirRec(records []types.NodeEntry, name string) (types.NodeEntry, bool) {
+	for _, rec := range records {
+		if rec.Hdr.GetType() != types.APFS_TYPE_DIR_REC {
+			continue
+		}
+		if rec.Key.(types.JDrecHashedKeyT).Name == name {
+			return rec, true
+		}
+	}
+	return types.NodeEntry{}, false
 }

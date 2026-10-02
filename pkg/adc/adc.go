@@ -5,6 +5,11 @@ import (
 	"io"
 )
 
+// DECOMP_RATIO is the output-to-input ratio the original decoder assumed.
+//
+// Deprecated: the decoder sizes its output from the true worst-case
+// expansion. Kept so existing importers keep compiling; it will be removed
+// in the next major version.
 const DECOMP_RATIO = 10
 
 // An ADC back-reference expands at most 67 bytes from three input bytes.
