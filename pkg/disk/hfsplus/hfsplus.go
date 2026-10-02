@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-
-	"github.com/apex/log"
 )
 
 // HFSPlus represents a mounted HFS+ filesystem
@@ -21,10 +19,9 @@ type HFSPlus struct {
 	closer io.Closer // Add this field to track closeable resources
 
 	// Cache commonly accessed structures
-	catalogBTree    *BTree
-	extentsBTree    *BTree
-	attributesBTree *BTree
-	startupBTree    *BTree
+	catalogBTree *BTree
+	extentsBTree *BTree
+	startupBTree *BTree
 }
 
 // Open creates a new HFSPlus instance from a file path
@@ -80,8 +77,6 @@ func (fs *HFSPlus) Files() ([]*FileRecord, error) {
 		return nil, fmt.Errorf("catalog B-tree not initialized")
 	}
 
-	fmt.Fprintf(os.Stderr, "Starting B-tree traversal (collecting all records)...\n")
-
 	// Collect all records in one pass through the tree
 	allFiles := make(map[CatalogNodeID][]*FileRecord)
 	allFolders := make(map[CatalogNodeID][]*FolderRecord)
@@ -89,8 +84,6 @@ func (fs *HFSPlus) Files() ([]*FileRecord, error) {
 	if err := fs.collectAllRecords(fs.catalogBTree.Root, allFiles, allFolders); err != nil {
 		return nil, fmt.Errorf("failed to collect records: %v", err)
 	}
-
-	fmt.Fprintf(os.Stderr, "Collected %d file groups and %d folder groups, building file paths...\n", len(allFiles), len(allFolders))
 
 	// Build folder paths
 	folderPaths := make(map[CatalogNodeID]string)
@@ -106,8 +99,6 @@ func (fs *HFSPlus) Files() ([]*FileRecord, error) {
 		return nil, fmt.Errorf("failed to build file list: %v", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "B-tree traversal complete, found %d files\n", len(files))
-
 	return files, nil
 }
 
@@ -115,17 +106,12 @@ func (fs *HFSPlus) Files() ([]*FileRecord, error) {
 func (fs *HFSPlus) collectAllRecords(node *BTNode, allFiles map[CatalogNodeID][]*FileRecord, allFolders map[CatalogNodeID][]*FolderRecord) error {
 	switch node.Descriptor.Kind {
 	case BTIndexNodeKind:
-		// For index nodes, recursively traverse all child nodes
+		// Index children were already read and stored in Child during mount
+		// (readBTreeNodeAtOffset populates CatalogRecord.Child). Reuse them
+		// instead of re-reading every node from disk.
 		for _, record := range node.Records {
 			if catalogRecord, ok := record.(*CatalogRecord); ok {
-				// Read child node
-				childOffset := fs.getNodeOffset(catalogRecord.Link, int(fs.catalogBTree.BTHeaderNode.Header.NodeSize))
-				childNode, err := fs.readBTreeNodeAtOffset(childOffset, int(fs.catalogBTree.BTHeaderNode.Header.NodeSize), fs.volumeHdr.CatalogFile)
-				if err != nil {
-					return fmt.Errorf("failed to read child node: %v", err)
-				}
-				// Recursively collect from child
-				if err := fs.collectAllRecords(childNode, allFiles, allFolders); err != nil {
+				if err := fs.collectAllRecords(&catalogRecord.Child, allFiles, allFolders); err != nil {
 					return err
 				}
 			}
@@ -321,15 +307,6 @@ func (fs *HFSPlus) initBTrees() (err error) {
 		fs.extentsBTree, err = fs.readBTree(fs.volumeHdr.ExtentsFile)
 		if err != nil {
 			return fmt.Errorf("failed to read extents B-tree: %v", err)
-		}
-	}
-
-	if fs.volumeHdr.AttributesFile.LogicalSize > 0 {
-		// Initialize attributes B-tree (optional, used for extended attributes)
-		fs.attributesBTree, err = fs.readBTree(fs.volumeHdr.AttributesFile)
-		if err != nil {
-			// Attributes B-tree is optional - log warning but continue
-			log.Warnf("failed to read attributes B-tree (continuing without extended attributes): %v", err)
 		}
 	}
 

@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/apex/log"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 const (
@@ -159,6 +159,12 @@ type BTreeNodePhys struct {
 	Entries []any
 	Parent  *BTreeNodePhys
 	Info    *BTreeInfoT
+
+	// nodeCache caches decoded child nodes by physical block address so
+	// repeated traversals skip re-reading, re-verifying, and re-decoding
+	// the same nodes. Optional: nil disables caching. Per-mount, set on
+	// the FS omap root by NewAPFS; assumes the backing device is immutable.
+	nodeCache *lru.Cache[uint64, *Obj]
 
 	block
 }
@@ -859,6 +865,38 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 	return nil
 }
 
+// readObjCached returns a verified object for blockAddr, consulting the
+// per-mount node cache when set so repeated traversals skip the read,
+// checksum, and per-entry decode. Falls back to ReadObj when no cache.
+func (n *BTreeNodePhys) readObjCached(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
+	if n.nodeCache != nil {
+		if o, ok := n.nodeCache.Get(blockAddr); ok {
+			return o, nil
+		}
+	}
+	o, err := ReadObj(r, blockAddr)
+	if err != nil {
+		return nil, err
+	}
+	if n.nodeCache != nil {
+		n.nodeCache.Add(blockAddr, o)
+	}
+	return o, nil
+}
+
+// EnableNodeCache attaches a bounded LRU cache of decoded B-tree nodes keyed by
+// physical block address to this node. GetFSRecordsForOid and GetOMapEntry
+// consult it so repeated traversals reuse decoded nodes. Intended to be called
+// once on the FS omap root after mounting; assumes an immutable device.
+func (n *BTreeNodePhys) EnableNodeCache(size int) error {
+	c, err := lru.New[uint64, *Obj](size)
+	if err != nil {
+		return err
+	}
+	n.nodeCache = c
+	return nil
+}
+
 // GetOMapEntry returns the omap entry for a given oid
 func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMapNodeEntry, error) {
 
@@ -889,7 +927,7 @@ func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMa
 			return &tocEntry, nil
 		}
 		// get child
-		if o, err := ReadObj(r, uint64(tocEntry.PAddr)); err != nil {
+		if o, err := n.readObjCached(r, uint64(tocEntry.PAddr)); err != nil {
 			return nil, fmt.Errorf("failed to read child node of entry %d", entIdx)
 		} else if child, ok := o.Body.(BTreeNodePhys); ok {
 			node = &child
@@ -912,7 +950,6 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 		for idx, entry := range node.Entries {
 
 			tocEntry = entry.(NodeEntry)
-			log.Debugf("%2d) %s", idx, tocEntry)
 
 			if node.IsLeaf() {
 				if tocEntry.Hdr.GetID() == uint64(oid) {
@@ -1003,7 +1040,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 		if err != nil {
 			return nil, fmt.Errorf("failed to get omap entry for oid %#x: %v", tocEntry.Val.(uint64), err)
 		}
-		nodeObj, err := ReadObj(r, childNodeOmapEntry.Val.Paddr)
+		nodeObj, err := n.readObjCached(r, childNodeOmapEntry.Val.Paddr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read child node: %v", err)
 		}
@@ -1054,7 +1091,6 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 				for idx := descPath[i]; idx < node.Nkeys; idx++ {
 
 					tocEntry = node.Entries[idx].(NodeEntry)
-					log.Debugf("%2d) %s", idx, tocEntry)
 
 					if tocEntry.Hdr.GetID() != uint64(oid) {
 						// This record doesn't have the right OID, so we must have
@@ -1081,7 +1117,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 			if err != nil {
 				return nil, fmt.Errorf("failed to get omap entry for oid %#x: %v", tocEntry.Val.(uint64), err)
 			}
-			nodeObj, err := ReadObj(r, childNodeOmapEntry.Val.Paddr)
+			nodeObj, err := n.readObjCached(r, childNodeOmapEntry.Val.Paddr)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read child node: %v", err)
 			}

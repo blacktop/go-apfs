@@ -11,6 +11,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/ulikunitz/xz v0.5.17
 	github.com/vbauerster/mpb/v7 v7.5.3
+	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8
 )
 
 require (
