@@ -238,6 +238,7 @@ func TestSharedCallersRejectInvalidChunks(t *testing.T) {
 		{"raw length mismatch", func(b *Partition) { b.Chunks[0].CompressedLength-- }},
 		{"chunk allocation ceiling", func(b *Partition) {
 			b.SectorCount = maxDecodedChunkSize/sectorSize + 1
+			b.Chunks[0].Type = COMPRESS_ZLIB
 			b.Chunks[0].DiskLength = maxDecodedChunkSize + 1
 		}},
 	} {
@@ -455,5 +456,71 @@ func TestXZDictionaryLimit(t *testing.T) {
 		if !errors.Is(err, boundedxz.ErrMemlimit) {
 			t.Fatalf("oversized XZ dictionary: %v", err)
 		}
+	}
+}
+
+// patternReader returns byte (off*31) at every offset, so large images need no backing memory.
+type patternReader struct{}
+
+func (patternReader) ReadAt(p []byte, off int64) (int, error) {
+	for i := range p {
+		p[i] = byte((off + int64(i)) * 31)
+	}
+	return len(p), nil
+}
+
+type largestWrite struct {
+	sum     uint32
+	largest int
+}
+
+func (w *largestWrite) Write(p []byte) (int, error) {
+	w.sum = crc32.Update(w.sum, crc32.IEEETable, p)
+	w.largest = max(w.largest, len(p))
+	return len(p), nil
+}
+
+func TestLargeRawChunkIsStreamed(t *testing.T) {
+	// One sector over the decode ceiling, as raw chunks of real OS images are (e.g. 84 MiB in iPadOS 17.7.11).
+	const size = maxDecodedChunkSize + sectorSize
+	const base = 4096
+	newPartition := func(kind udifBlockChunkType) *Partition {
+		return &Partition{
+			udifBlockData: udifBlockData{SectorCount: size / sectorSize, BuffersNeeded: 1},
+			sr:            io.NewSectionReader(patternReader{}, 0, base+size),
+			Chunks:        []udifBlockChunk{{Type: kind, DiskLength: size, CompressedOffset: base, CompressedLength: size}},
+		}
+	}
+	want := func(off, length int64) []byte {
+		p := make([]byte, length)
+		patternReader{}.ReadAt(p, base+off)
+		return p
+	}
+
+	b := newPartition(UNCOMPRESSED)
+	w := new(largestWrite)
+	if err := b.Write(bufio.NewWriter(w)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var sum uint32
+	for off := int64(0); off < size; off += 1 << 20 {
+		sum = crc32.Update(sum, crc32.IEEETable, want(off, min(1<<20, size-off)))
+	}
+	if w.sum != sum || w.largest > 64<<10 {
+		t.Fatalf("write: crc %#x want %#x, largest write %d", w.sum, sum, w.largest)
+	}
+
+	for _, r := range [][2]int64{{0, 13}, {size/2 - 7, 4096}, {size - 13, 13}} {
+		p := make([]byte, r[1])
+		if n, err := b.ReadAt(p, r[0]); n != int(r[1]) || err != nil || !bytes.Equal(p, want(r[0], r[1])) {
+			t.Fatalf("read %v: n=%d err=%v", r, n, err)
+		}
+	}
+	if b.cache.Len() != 0 {
+		t.Fatalf("a raw chunk over the ceiling was cached")
+	}
+
+	if err := newPartition(COMPRESS_ZLIB).Write(bufio.NewWriter(io.Discard)); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("compressed chunk over the ceiling: %v", err)
 	}
 }
