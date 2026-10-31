@@ -110,6 +110,9 @@ checksum:
   disable: false
 signs:
   - artifacts: checksum
+    signature: "${artifact}.sshsig"
+    cmd: ./hack/make/sign
+    args: ["${artifact}", "${signature}"]
 brews:
   - name: apfs
     repository:

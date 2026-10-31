@@ -36,7 +36,8 @@ test-dmgs: ## Regenerate the committed test DMG fixtures
 .PHONY: dry_release
 dry_release: ## Run goreleaser without releasing/pushing artifacts to github
 	@echo " > Creating Pre-release Build ${NEXT_VERSION}"
-	@GOROOT=$(shell go env GOROOT) goreleaser build --id darwin --clean --timeout 60m --snapshot --single-target --output dist/apfs
+	@GOROOT=$(shell go env GOROOT) goreleaser build --id darwin --clean --timeout 60m --snapshot --single-target
+	@cp dist/darwin_darwin_all/apfs dist/apfs
 
 .PHONY: snapshot
 snapshot: ## Run goreleaser snapshot
@@ -54,8 +55,11 @@ check-release: ## Check the tree is clean, on main, in sync with origin, and pas
 .PHONY: release
 release: check-release ## Tag NEXT_VERSION, point the CLI at it, and publish (override with NEXT_VERSION=vX.Y.Z)
 	@echo " > Creating Release ${NEXT_VERSION}"
-	@hack/make/release ${NEXT_VERSION}
-	@GOROOT=$(shell go env GOROOT) goreleaser --clean --timeout 60m --skip=validate
+	@GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token --hostname github.com)}" && \
+		: "$${GITHUB_TOKEN:?set GITHUB_TOKEN or run gh auth login}" && \
+		export GITHUB_TOKEN && \
+		hack/make/release "${NEXT_VERSION}" && \
+		exec env GOROOT="$(shell go env GOROOT)" GORELEASER_CURRENT_TAG="${NEXT_VERSION}" goreleaser release --clean --timeout 60m --skip=validate
 
 .PHONY: destroy
 destroy: ## Delete the CUR_VERSION tag (the Go proxy keeps that version, so never reuse it)

@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+artifact="${1:?usage: hack/make/sign artifact signature}"
+signature="${2:?usage: hack/make/sign artifact signature}"
+
+if [ "$(git config --get gpg.format)" != ssh ]; then
+	echo "release signing requires Git SSH signing (gpg.format=ssh)" >&2
+	exit 1
+fi
+
+signer="$(git config --get gpg.ssh.program)" &&
+	key="$(git config --get user.signingkey)" &&
+	[ -n "$signer" ] && [ -n "$key" ] || {
+	echo "configure gpg.ssh.program and user.signingkey before releasing" >&2
+	exit 1
+}
+
+exec "$signer" -Y sign -n file -f "$key" < "$artifact" > "$signature"

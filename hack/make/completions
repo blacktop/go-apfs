@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
+cd "$(dirname "$0")/../../cmd/apfs"
 rm -rf ../../completions
 mkdir ../../completions
-cd cmd/apfs
 for sh in bash zsh fish powershell; do
 	go run main.go completion "$sh" > "../../completions/_$sh"
 done
