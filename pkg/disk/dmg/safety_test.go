@@ -17,6 +17,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -238,6 +239,7 @@ func TestSharedCallersRejectInvalidChunks(t *testing.T) {
 		{"raw length mismatch", func(b *Partition) { b.Chunks[0].CompressedLength-- }},
 		{"chunk allocation ceiling", func(b *Partition) {
 			b.SectorCount = maxDecodedChunkSize/sectorSize + 1
+			b.Chunks[0].Type = COMPRESS_ZLIB
 			b.Chunks[0].DiskLength = maxDecodedChunkSize + 1
 		}},
 	} {
@@ -294,6 +296,42 @@ func TestReadFileAndPartitionWrite(t *testing.T) {
 
 func syntheticDMG(t *testing.T, change func(*UDIFResourceFile, *udifBlockData, *udifBlockChunk)) *io.SectionReader {
 	t.Helper()
+	data := bytes.Repeat([]byte{'P'}, 512)
+	return syntheticImage(t, "test", bytes.NewReader(data), int64(len(data)), change)
+}
+
+// imageReader serves zeros before the data fork, data up to dataEnd, then tail.
+type imageReader struct {
+	data    io.ReaderAt
+	dataEnd int64
+	tail    []byte
+}
+
+func (r imageReader) ReadAt(p []byte, off int64) (int, error) {
+	n := 0
+	for n < len(p) {
+		pos := off + int64(n)
+		got := 0
+		switch {
+		case pos < 28:
+			got = len(p[n:min(len(p), n+int(28-pos))])
+			clear(p[n : n+got])
+		case pos < r.dataEnd:
+			got, _ = r.data.ReadAt(p[n:min(len(p), n+int(r.dataEnd-pos))], pos-28)
+		case pos-r.dataEnd < int64(len(r.tail)):
+			got = copy(p[n:], r.tail[pos-r.dataEnd:])
+		}
+		if got == 0 {
+			return n, io.EOF
+		}
+		n += got
+	}
+	return n, nil
+}
+
+// syntheticImage builds a one-block image: 28 bytes, dataLen bytes read from data, then the plist and footer.
+func syntheticImage(t *testing.T, name string, data io.ReaderAt, dataLen int64, change func(*UDIFResourceFile, *udifBlockData, *udifBlockChunk)) *io.SectionReader {
+	t.Helper()
 	footer := UDIFResourceFile{Signature: udifSignature{'k', 'o', 'l', 'y'}, SectorCount: 4, DataForkOffset: 17, DataForkLength: 523}
 	header := udifBlockData{Signature: udifSignature{'m', 'i', 's', 'h'}, StartSector: 1, SectorCount: 1, DataOffset: 11, ChunkCount: 1}
 	chunk := udifBlockChunk{Type: UNCOMPRESSED, DiskLength: 1, CompressedLength: 512}
@@ -307,20 +345,19 @@ func syntheticDMG(t *testing.T, change func(*UDIFResourceFile, *udifBlockData, *
 	if err := binary.Write(&blk, binary.BigEndian, chunk); err != nil {
 		t.Fatal(err)
 	}
-	p, err := plist.Marshal(resourceFork{ResourceFork: map[string][]block{"blkx": {{Name: "test", Data: blk.Bytes()}}}}, plist.XMLFormat)
+	p, err := plist.Marshal(resourceFork{ResourceFork: map[string][]block{"blkx": {{Name: name, Data: blk.Bytes()}}}}, plist.XMLFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var image bytes.Buffer
-	image.Write(make([]byte, 28))
-	image.Write(bytes.Repeat([]byte{'P'}, 512))
-	footer.PlistOffset = uint64(image.Len())
+	var tail bytes.Buffer
+	footer.PlistOffset = uint64(28 + dataLen)
 	footer.PlistLength = uint64(len(p))
-	image.Write(p)
-	if err := binary.Write(&image, binary.BigEndian, footer); err != nil {
+	tail.Write(p)
+	if err := binary.Write(&tail, binary.BigEndian, footer); err != nil {
 		t.Fatal(err)
 	}
-	return io.NewSectionReader(bytes.NewReader(image.Bytes()), 0, int64(image.Len()))
+	r := imageReader{data: data, dataEnd: 28 + dataLen, tail: tail.Bytes()}
+	return io.NewSectionReader(r, 0, r.dataEnd+int64(tail.Len()))
 }
 
 func TestNewDMGChecksSectorArithmetic(t *testing.T) {
@@ -455,5 +492,115 @@ func TestXZDictionaryLimit(t *testing.T) {
 		if !errors.Is(err, boundedxz.ErrMemlimit) {
 			t.Fatalf("oversized XZ dictionary: %v", err)
 		}
+	}
+}
+
+// patternReader returns byte (off*31) at every offset, so large images need no backing memory.
+type patternReader struct{}
+
+func (patternReader) ReadAt(p []byte, off int64) (int, error) {
+	for i := range p {
+		p[i] = byte((off + int64(i)) * 31)
+	}
+	return len(p), nil
+}
+
+type largestWrite struct {
+	sum     uint32
+	largest int
+}
+
+func (w *largestWrite) Write(p []byte) (int, error) {
+	w.sum = crc32.Update(w.sum, crc32.IEEETable, p)
+	w.largest = max(w.largest, len(p))
+	return len(p), nil
+}
+
+func TestLargeRawChunkIsStreamed(t *testing.T) {
+	// One sector over the decode ceiling, as raw chunks of real OS images are (e.g. 84 MiB in iPadOS 17.7.11).
+	const size = maxDecodedChunkSize + sectorSize
+	const base = 4096
+	newPartition := func(kind udifBlockChunkType) *Partition {
+		return &Partition{
+			udifBlockData: udifBlockData{SectorCount: size / sectorSize, BuffersNeeded: 1},
+			sr:            io.NewSectionReader(patternReader{}, 0, base+size),
+			Chunks:        []udifBlockChunk{{Type: kind, DiskLength: size, CompressedOffset: base, CompressedLength: size}},
+		}
+	}
+	want := func(off, length int64) []byte {
+		p := make([]byte, length)
+		patternReader{}.ReadAt(p, base+off)
+		return p
+	}
+
+	b := newPartition(UNCOMPRESSED)
+	w := new(largestWrite)
+	if err := b.Write(bufio.NewWriter(w)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var sum uint32
+	for off := int64(0); off < size; off += 1 << 20 {
+		sum = crc32.Update(sum, crc32.IEEETable, want(off, min(1<<20, size-off)))
+	}
+	if w.sum != sum || w.largest > 64<<10 {
+		t.Fatalf("write: crc %#x want %#x, largest write %d", w.sum, sum, w.largest)
+	}
+
+	for _, r := range [][2]int64{{0, 13}, {size/2 - 7, 4096}, {size - 13, 13}} {
+		p := make([]byte, r[1])
+		if n, err := b.ReadAt(p, r[0]); n != int(r[1]) || err != nil || !bytes.Equal(p, want(r[0], r[1])) {
+			t.Fatalf("read %v: n=%d err=%v", r, n, err)
+		}
+	}
+	if b.cache.Len() != 0 {
+		t.Fatalf("a raw chunk over the ceiling was cached")
+	}
+
+	if err := newPartition(COMPRESS_ZLIB).Write(bufio.NewWriter(io.Discard)); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("compressed chunk over the ceiling: %v", err)
+	}
+}
+
+func TestLoadRefusesLargeRawGPTChunk(t *testing.T) {
+	// Load buffers the GPT chunks, so a raw one over the ceiling must fail before allocating it.
+	const size = maxDecodedChunkSize + sectorSize
+	d, err := NewDMG(syntheticImage(t, "Primary GPT Header", patternReader{}, size, func(f *UDIFResourceFile, b *udifBlockData, c *udifBlockChunk) {
+		f.SectorCount = size/sectorSize + 1
+		f.DataForkLength = 11 + size
+		b.SectorCount = size / sectorSize
+		c.DiskLength = size / sectorSize
+		c.CompressedLength = size
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	err = d.Load()
+	runtime.ReadMemStats(&after)
+	if err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("load: %v", err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Fatalf("load allocated %d bytes before refusing the chunk", allocated)
+	}
+}
+
+func TestRawChunkWriteDetectsTruncatedSource(t *testing.T) {
+	sr := syntheticDMG(t, nil)
+	d, err := NewDMG(sr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := io.ReadAll(io.NewSectionReader(sr, 0, sr.Size()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep 7 of the chunk's 512 bytes, at offset 28, but still declare the full size.
+	b := &d.Partitions[0]
+	b.sr = io.NewSectionReader(bytes.NewReader(image[:35]), 0, sr.Size())
+	var out bytes.Buffer
+	if err := b.Write(bufio.NewWriter(&out)); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("truncated write: %v, wrote %d bytes", err, out.Len())
 	}
 }

@@ -46,8 +46,9 @@ func newLZMAReader(data []byte) (io.Reader, error) {
 const (
 	sectorSize    = 0x200
 	zeroBlockSize = 32 << 10
-	// Chunks are decoded into memory in full, so this ceiling bounds the
-	// allocation per chunk. Raising it requires streaming decode.
+	// Compressed chunks are decoded into memory in full, so this ceiling bounds
+	// the allocation per chunk. Raising it requires streaming decode. Raw chunks
+	// are copied from the image in pieces and are bounded by the image size only.
 	maxDecodedChunkSize    = 64 << 20
 	maxCompressedChunkSize = 64 << 20
 	maxLZMADictionary      = xz.DefaultDictMax
@@ -291,6 +292,13 @@ func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
 			if err := writeZeros(w, chunk.DiskLength); err != nil {
 				return err
 			}
+		} else if chunk.Type == UNCOMPRESSED {
+			if _, err := io.CopyN(w, io.NewSectionReader(b.sr, int64(chunk.CompressedOffset), int64(chunk.CompressedLength)), int64(chunk.CompressedLength)); err != nil {
+				if err == io.EOF {
+					err = io.ErrUnexpectedEOF
+				}
+				return fmt.Errorf("chunk %d: %w", idx, err)
+			}
 		} else {
 			data, err := b.decompressChunk(chunk)
 			if err != nil {
@@ -389,6 +397,22 @@ func (b *Partition) readAt(p []byte, off int64, cache *lru.Cache[int, []byte]) (
 		if chunk.Type == ZERO_FILL || chunk.Type == IGNORED {
 			count := min(chunk.DiskLength-(absolute-chunk.DiskOffset), remaining)
 			clear(p[n : n+int(count)])
+			n += int(count)
+			absolute += count
+			remaining -= count
+			chunkIdx++
+			continue
+		}
+		if chunk.Type == UNCOMPRESSED && chunk.DiskLength > maxDecodedChunkSize {
+			// Too large to decode into the cache: read the requested range from the image.
+			diff := absolute - chunk.DiskOffset
+			count := min(chunk.DiskLength-diff, remaining)
+			if got, err := b.sr.ReadAt(p[n:n+int(count)], int64(chunk.CompressedOffset+diff)); uint64(got) != count {
+				if err == nil {
+					err = io.ErrUnexpectedEOF
+				}
+				return n + got, fmt.Errorf("chunk %d: %w", chunkIdx, err)
+			}
 			n += int(count)
 			absolute += count
 			remaining -= count
@@ -524,7 +548,8 @@ func (chunk udifBlockChunk) validateInput(r *io.SectionReader) error {
 	if chunk.Type == COMMENT || chunk.Type == LAST_BLOCK || chunk.Type == ZERO_FILL || chunk.Type == IGNORED {
 		return nil
 	}
-	if r == nil || r.Size() < 0 || chunk.CompressedOffset > uint64(r.Size()) || chunk.CompressedLength > uint64(r.Size())-chunk.CompressedOffset || chunk.CompressedLength > maxCompressedChunkSize {
+	if r == nil || r.Size() < 0 || chunk.CompressedOffset > uint64(r.Size()) || chunk.CompressedLength > uint64(r.Size())-chunk.CompressedOffset ||
+		(chunk.Type != UNCOMPRESSED && chunk.CompressedLength > maxCompressedChunkSize) {
 		return fmt.Errorf("chunk compressed range %d+%d out of bounds", chunk.CompressedOffset, chunk.CompressedLength)
 	}
 	return nil
@@ -548,7 +573,10 @@ func (b *Partition) validateChunkRange(chunk udifBlockChunk) error {
 	if chunk.DiskOffset < start || chunk.DiskOffset-start > size || chunk.DiskLength > size-(chunk.DiskOffset-start) {
 		return fmt.Errorf("chunk logical range %d+%d outside partition", chunk.DiskOffset, chunk.DiskLength)
 	}
-	if chunk.Type != ZERO_FILL && chunk.Type != IGNORED && chunk.DiskLength > maxDecodedChunkSize {
+	if chunk.Type == UNCOMPRESSED && chunk.CompressedLength != chunk.DiskLength {
+		return fmt.Errorf("raw chunk length %d does not match %d", chunk.CompressedLength, chunk.DiskLength)
+	}
+	if chunk.Type != ZERO_FILL && chunk.Type != IGNORED && chunk.Type != UNCOMPRESSED && chunk.DiskLength > maxDecodedChunkSize {
 		return fmt.Errorf("chunk output length %d out of range", chunk.DiskLength)
 	}
 	return chunk.validateInput(b.sr)
@@ -560,6 +588,11 @@ func (b *Partition) decompressChunk(chunk udifBlockChunk) ([]byte, error) {
 	}
 	if chunk.Type == COMMENT || chunk.Type == LAST_BLOCK {
 		return nil, nil
+	}
+	// The whole chunk is buffered here, so raw chunks keep the ceiling too.
+	// Write and readAt stream raw chunks above it without calling this.
+	if chunk.DiskLength > maxDecodedChunkSize {
+		return nil, fmt.Errorf("chunk output length %d out of range", chunk.DiskLength)
 	}
 	var in []byte
 	if chunk.Type != ZERO_FILL && chunk.Type != IGNORED {
