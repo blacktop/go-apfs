@@ -293,7 +293,10 @@ func (b *Partition) Write(w *bufio.Writer, bar ...*mpb.Bar) error {
 				return err
 			}
 		} else if chunk.Type == UNCOMPRESSED {
-			if _, err := io.Copy(w, io.NewSectionReader(b.sr, int64(chunk.CompressedOffset), int64(chunk.CompressedLength))); err != nil {
+			if _, err := io.CopyN(w, io.NewSectionReader(b.sr, int64(chunk.CompressedOffset), int64(chunk.CompressedLength)), int64(chunk.CompressedLength)); err != nil {
+				if err == io.EOF {
+					err = io.ErrUnexpectedEOF
+				}
 				return fmt.Errorf("chunk %d: %w", idx, err)
 			}
 		} else {
@@ -585,6 +588,11 @@ func (b *Partition) decompressChunk(chunk udifBlockChunk) ([]byte, error) {
 	}
 	if chunk.Type == COMMENT || chunk.Type == LAST_BLOCK {
 		return nil, nil
+	}
+	// The whole chunk is buffered here, so raw chunks keep the ceiling too.
+	// Write and readAt stream raw chunks above it without calling this.
+	if chunk.DiskLength > maxDecodedChunkSize {
+		return nil, fmt.Errorf("chunk output length %d out of range", chunk.DiskLength)
 	}
 	var in []byte
 	if chunk.Type != ZERO_FILL && chunk.Type != IGNORED {
