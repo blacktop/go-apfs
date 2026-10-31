@@ -173,7 +173,7 @@ func TestReadAtBoundariesAndCache(t *testing.T) {
 			if mode == "uncached" {
 				d.config.DisableCache = true
 			}
-			for i := 0; i < 2; i++ {
+			for i := range 2 {
 				p := make([]byte, 8)
 				n, err := reader.ReadAt(p, 3)
 				if n != 8 || err != nil || !bytes.Equal(p, want[3:11]) {
@@ -371,8 +371,7 @@ func TestLZMADictionaryLimit(t *testing.T) {
 	encoded := compressTestData(t, "lzma", []byte("small"))
 	binary.LittleEndian.PutUint32(encoded[1:5], maxLZMADictionary+1)
 	_, err := newLZMAReader(encoded)
-	var dictErr *lzma.ErrDictSize
-	if !errors.As(err, &dictErr) {
+	if _, ok := errors.AsType[*lzma.ErrDictSize](err); !ok {
 		t.Fatalf("oversized dictionary: %v", err)
 	}
 }
