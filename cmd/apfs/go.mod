@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/apex/log v1.9.0
-	github.com/blacktop/go-apfs v1.0.29
+	github.com/blacktop/go-apfs v1.0.30
 	github.com/c-bata/go-prompt v0.2.6
 	github.com/fatih/color v1.19.0
 	github.com/spf13/cobra v1.9.1
