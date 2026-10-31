@@ -59,6 +59,7 @@ type EncryptionHeader struct {
 }
 
 // DecryptDMGWithPassword decrypts a DMG file using a password.
+// The caller is responsible for removing the returned temporary file.
 func DecryptDMGWithPassword(path string, password string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -91,12 +92,6 @@ func DecryptDMGWithPassword(path string, password string) (string, error) {
 			hdr.BlobEncAlgorithm, hdr.BlobEncMode, hdr.BlobEncPadding)
 	}
 
-	tmp, err := os.CreateTemp("", "dmg")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp DMG file: %w", err)
-	}
-	defer tmp.Close()
-
 	if hdr.KdfAlgorithm != 103 || hdr.KdfPrngAlgorithm != 0 || hdr.KdfSaltLen != 20 {
 		return "", fmt.Errorf("unsupported key derivation algorithm: %d, prng algorithm: %d, salt length: %d",
 			hdr.KdfAlgorithm, hdr.KdfPrngAlgorithm, hdr.KdfSaltLen)
@@ -111,7 +106,6 @@ func DecryptDMGWithPassword(path string, password string) (string, error) {
 	// Decrypt the keyblob using Triple DES (DES_EDE3_CBC).
 	tdes, err := des.NewTripleDESCipher(dk)
 	if err != nil {
-		tmp.Close()
 		return "", fmt.Errorf("failed to create 3DES cipher: %v", err)
 	}
 
@@ -120,7 +114,6 @@ func DecryptDMGWithPassword(path string, password string) (string, error) {
 	keyblob = keyblob[:hdr.EncryptedKeyblobSize]
 
 	if len(keyblob)%tdes.BlockSize() != 0 {
-		tmp.Close()
 		return "", fmt.Errorf("invalid keyblob size, not a multiple of block size")
 	}
 
@@ -177,6 +170,7 @@ func decryptDMGWithPasswordUsingHdiutil(path string, password string) (string, e
 
 // DecryptDMGWithKey decrypts a DMG file using a hex-encoded key string.
 // The key string should be 72 characters: 32 for AES key (16 bytes) + 40 for HMAC key (20 bytes).
+// The caller is responsible for removing the returned temporary file.
 func DecryptDMGWithKey(path string, keyString string) (string, error) {
 	if len(keyString) != 72 {
 		return "", fmt.Errorf("invalid key length: expected 72 hex characters (16 bytes AES + 20 bytes HMAC)")
@@ -220,7 +214,13 @@ func decryptDMGWithKeys(path string, aesKey []byte, hmacKey []byte) (string, err
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp DMG file: %w", err)
 	}
-	defer tmp.Close()
+	keep := false
+	defer func() {
+		_ = tmp.Close()
+		if !keep {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
 
 	// Create block cipher based on AES key size
 	var blk cipher.Block
@@ -267,5 +267,9 @@ func decryptDMGWithKeys(path string, aesKey []byte, hmacKey []byte) (string, err
 		}
 	}
 
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("failed to close decrypted DMG: %w", err)
+	}
+	keep = true
 	return tmp.Name(), nil
 }

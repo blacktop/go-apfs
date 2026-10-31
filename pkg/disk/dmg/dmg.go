@@ -575,6 +575,11 @@ func (b *Partition) decompressChunk(chunk udifBlockChunk) ([]byte, error) {
 // Open opens the named file using os.Open and prepares it for use as a dmg.
 func Open(name string, c *Config) (*DMG, error) {
 	var decrypted string
+	defer func() {
+		if decrypted != "" {
+			_ = os.Remove(decrypted)
+		}
+	}()
 	if len(c.Password) > 0 || len(c.Key) > 0 {
 		if len(c.Password) > 0 {
 			var err error
@@ -614,9 +619,6 @@ func Open(name string, c *Config) (*DMG, error) {
 		f.Close()
 		return nil, err
 	}
-	if len(decrypted) > 0 {
-		ff.decrypted = decrypted
-	}
 	if c != nil {
 		ff.config = *c
 	}
@@ -625,6 +627,8 @@ func Open(name string, c *Config) (*DMG, error) {
 		return nil, err
 	}
 	ff.closer = f
+	ff.decrypted = decrypted
+	decrypted = "" // Close now owns the temporary file.
 	return ff, nil
 }
 
@@ -696,7 +700,7 @@ func NewDMG(sr *io.SectionReader) (*DMG, error) {
 			return nil, fmt.Errorf("failed to parse DMG plist data: %w", err)
 		}
 	} else if d.Footer.RsrcForkOffset > 0 && d.Footer.RsrcForkLength > 0 {
-		log.Fatal("Resource fork parsing is not yet implemented.")
+		return nil, fmt.Errorf("DMG resource fork parsing is not supported")
 	}
 
 	if nsiz, ok := d.Plist.ResourceFork["nsiz"]; ok {
