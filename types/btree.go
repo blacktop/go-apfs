@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -160,6 +161,10 @@ type BTreeNodePhys struct {
 	Parent  *BTreeNodePhys
 	Info    *BTreeInfoT
 
+	subtype objType
+
+	RootOid OidT
+
 	// nodeCache caches decoded child nodes by physical block address so
 	// repeated traversals skip re-reading, re-verifying, and re-decoding
 	// the same nodes. nil disables caching. It belongs to the root node it
@@ -184,6 +189,10 @@ func (n *BTreeNodePhys) FixedKvSize() bool {
 }
 func (n *BTreeNodePhys) Hashed() bool {
 	return (n.Flags & BTNODE_HASHED) != 0
+}
+
+func (n *BTreeNodePhys) treeHashed() bool {
+	return n.Info != nil && n.Info.Fixed.Flags&BTREE_HASHED != 0
 }
 
 // ReadFextNodeEntry reads a fext node entry from reader
@@ -869,13 +878,13 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 
 // readNodeCached returns the verified B-tree node at blockAddr, consulting
 // the node cache when one is enabled.
-func (n *BTreeNodePhys) readNodeCached(r io.ReaderAt, blockAddr uint64) (BTreeNodePhys, error) {
+func (n *BTreeNodePhys) readNodeCached(r io.ReaderAt, blockAddr uint64, subtype objType) (BTreeNodePhys, error) {
 	if n.nodeCache != nil {
 		if node, ok := n.nodeCache.Get(blockAddr); ok {
 			return node, nil
 		}
 	}
-	o, err := ReadObj(r, blockAddr)
+	o, err := ReadBTreeNode(r, blockAddr, subtype)
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to read B-tree node at %#x: %w", blockAddr, err)
 	}
@@ -930,7 +939,7 @@ func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMa
 			}
 			return &tocEntry, nil
 		}
-		child, err := n.readNodeCached(r, uint64(tocEntry.PAddr))
+		child, err := n.readNodeCached(r, uint64(tocEntry.PAddr), n.subtype)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read omap child: %w", err)
 		}
@@ -938,18 +947,34 @@ func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMa
 	}
 }
 
+func childOidFromIndexValue(val any, rootOid OidT, hashed bool) (OidT, error) {
+	var childOid OidT
+	switch v := val.(type) {
+	case uint64:
+		childOid = OidT(v)
+	case BTreeNodeIndexNodeValT:
+		childOid = v.ChildOid
+	default:
+		return 0, fmt.Errorf("index entry value is %T, not a child oid", val)
+	}
+	if hashed {
+		childOid += rootOid
+	}
+	return childOid, nil
+}
+
 // readChildNode resolves an FS-tree index entry (whose value is a virtual
 // OID) through the omap and returns the decoded child node.
-func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid XidT) (BTreeNodePhys, error) {
-	childOid, ok := entry.Val.(uint64)
-	if !ok {
-		return BTreeNodePhys{}, fmt.Errorf("index entry value is %T, not a child oid", entry.Val)
+func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid XidT, rootOid OidT, hashed bool, subtype objType) (BTreeNodePhys, error) {
+	childOid, err := childOidFromIndexValue(entry.Val, rootOid, hashed)
+	if err != nil {
+		return BTreeNodePhys{}, err
 	}
-	omapEntry, err := n.GetOMapEntry(r, OidT(childOid), maxXid)
+	omapEntry, err := n.GetOMapEntry(r, childOid, maxXid)
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to get omap entry for oid %#x: %w", childOid, err)
 	}
-	child, err := n.readNodeCached(r, omapEntry.Val.Paddr)
+	child, err := n.readNodeCached(r, omapEntry.Val.Paddr, subtype)
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to read child of oid %#x: %w", childOid, err)
 	}
@@ -1057,7 +1082,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 			descPath[i] = node.Nkeys - 1
 		}
 
-		if node, err = n.readChildNode(r, tocEntry, maxXid); err != nil {
+		if node, err = n.readChildNode(r, tocEntry, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype); err != nil {
 			return nil, err
 		}
 	}
@@ -1127,9 +1152,102 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 
 			tocEntry = node.Entries[descPath[i]].(NodeEntry)
 
-			if node, err = n.readChildNode(r, tocEntry, maxXid); err != nil {
+			if node, err = n.readChildNode(r, tocEntry, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype); err != nil {
 				return nil, err
 			}
 		}
+	}
+}
+
+func (fextRoot *BTreeNodePhys) GetFextRecordsForPrivateID(r io.ReaderAt, privateID uint64) ([]FextNodeEntry, error) {
+	var records []FextNodeEntry
+	var tocEntry OMapNodeEntry
+	var err error
+
+	if fextRoot.Level == math.MaxUint16 {
+		return nil, fmt.Errorf("fext tree level %d is too deep", fextRoot.Level)
+	}
+	treeHeight := fextRoot.Level + 1
+	descPath := make([]uint32, treeHeight)
+
+	node := *fextRoot
+
+	for i := range treeHeight {
+		for idx, entry := range node.Entries {
+			if node.IsLeaf() {
+				leaf := entry.(FextNodeEntry)
+				if leaf.Key.PrivateID == privateID {
+					break
+				}
+				if leaf.Key.PrivateID > privateID {
+					return nil, fmt.Errorf("no records exist for private id=%#x", privateID)
+				}
+				descPath[i]++
+				continue
+			}
+
+			tocEntry = entry.(OMapNodeEntry)
+			if uint64(tocEntry.Key.Oid) >= privateID {
+				if descPath[i] != 0 {
+					descPath[i]--
+					idx--
+					tocEntry = node.Entries[idx].(OMapNodeEntry)
+					break
+				}
+				if uint64(tocEntry.Key.Oid) == privateID {
+					break
+				}
+				return nil, fmt.Errorf("no such records exist for private id=%#x", privateID)
+			}
+			descPath[i]++
+		}
+
+		if node.IsLeaf() {
+			break
+		}
+
+		if descPath[i] >= node.Nkeys {
+			descPath[i] = node.Nkeys - 1
+		}
+
+		if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype); err != nil {
+			return nil, fmt.Errorf("failed to read fext child node: %w", err)
+		}
+	}
+
+descent:
+	for {
+		node = *fextRoot
+
+		for i := range treeHeight {
+			if descPath[i] >= node.Nkeys {
+				if i == 0 || node.IsRoot() {
+					return records, nil
+				}
+				descPath[i-1]++
+				for j := uint16(i); j < treeHeight; j++ {
+					descPath[j] = 0
+				}
+				continue descent
+			}
+
+			if node.IsLeaf() {
+				for idx := descPath[i]; idx < node.Nkeys; idx++ {
+					leaf := node.Entries[idx].(FextNodeEntry)
+					if leaf.Key.PrivateID != privateID {
+						return records, nil
+					}
+					records = append(records, leaf)
+					descPath[i]++
+				}
+				continue descent
+			}
+
+			tocEntry = node.Entries[descPath[i]].(OMapNodeEntry)
+			if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype); err != nil {
+				return nil, fmt.Errorf("failed to read fext child node: %w", err)
+			}
+		}
+		return nil, fmt.Errorf("fext tree has no leaf within its root level %d", fextRoot.Level)
 	}
 }
