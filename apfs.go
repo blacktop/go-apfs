@@ -153,12 +153,13 @@ func NewAPFS(dev disk.Device) (*APFS, error) {
 
 	log.Debugf("File System Root Entry: %s", fsRootEntry)
 
-	fsRootBtreeObj, err := types.ReadObj(a.r, fsRootEntry.Val.Paddr)
+	fsRootBtreeObj, err := types.ReadBTreeNode(a.r, fsRootEntry.Val.Paddr, types.OBJECT_TYPE_FSTREE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read root btree: %v", err)
 	}
 
 	if root, ok := fsRootBtreeObj.Body.(types.BTreeNodePhys); ok {
+		root.RootOid = a.Volume.RootTreeOid
 		a.FSRootBtree = root
 	}
 
@@ -265,13 +266,16 @@ func (a *APFS) Cat(path string) error {
 		var fileName string
 		// var uncompressedSize uint64
 		var fileSize uint64
+		var privateID uint64
 		var fexts []types.FileExtent
+		var rsrcFexts []types.FileExtent
 
 		compressed := false
 
 		for _, rec := range fsRecords {
 			switch rec.Hdr.GetType() {
 			case types.APFS_TYPE_INODE:
+				privateID = rec.Val.(types.JInodeVal).PrivateID
 				if rec.Val.(types.JInodeVal).InternalFlags&types.INODE_HAS_UNCOMPRESSED_SIZE != 0 {
 					compressed = true
 				}
@@ -296,19 +300,9 @@ func (a *APFS) Cat(path string) error {
 						binary.Read(bytes.NewReader(rec.Val.(types.JXattrValT).Data.([]byte)), binary.LittleEndian, &decmpfsHdr)
 					} else if rec.Val.(types.JXattrValT).Flags.DataStream() {
 						xattrOid := types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID)
-						fsRecords, err = a.fsOMapBtree.GetFSRecordsForOid(sr, a.FSRootBtree, xattrOid, types.XidT(^uint64(0)))
+						rsrcFexts, err = a.resourceForkExtents(xattrOid)
 						if err != nil {
-							return fmt.Errorf("failed to get fs records for oid %#x: %v", xattrOid, err)
-						}
-						for _, rec := range fsRecords {
-							switch rec.Hdr.GetType() {
-							case types.APFS_TYPE_FILE_EXTENT:
-								fexts = append(fexts, types.FileExtent{
-									Address: rec.Key.(types.JFileExtentKeyT).LogicalAddr,
-									Block:   rec.Val.(types.JFileExtentValT).PhysBlockNum,
-									Length:  rec.Val.(types.JFileExtentValT).Length(),
-								})
-							}
+							return fmt.Errorf("failed to get resource fork extents for oid %#x: %v", xattrOid, err)
 						}
 					}
 				case types.XATTR_DECMPFS_EA_NAME:
@@ -323,9 +317,15 @@ func (a *APFS) Cat(path string) error {
 			}
 		}
 
+		if !compressed && len(fexts) == 0 && fileSize > 0 {
+			if fexts, err = a.fextExtents(privateID); err != nil {
+				return fmt.Errorf("failed to get file-extent tree records for private id %#x: %v", privateID, err)
+			}
+		}
+
 		if compressed {
 			w := bufio.NewWriter(os.Stdout)
-			if err := decmpfsHdr.DecompressFile(a.r, w, fexts, true); err != nil {
+			if err := decmpfsHdr.DecompressFile(a.r, w, rsrcFexts, true); err != nil {
 				return fmt.Errorf("failed to decompress %s: %v", fileName, err)
 			}
 			w.Flush()
@@ -563,9 +563,12 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 
 	var decmpfsHdr *types.DecmpfsDiskHeader
 	var symlink string
+	fileName := rec.Key.(types.JDrecHashedKeyT).Name
 	var uncompressedSize uint64
 	var fileSize uint64
+	var privateID uint64
 	var fexts []types.FileExtent
+	var rsrcFexts []types.FileExtent
 	var foundInode bool
 
 	compressed := false
@@ -574,6 +577,7 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 		switch rec.Hdr.GetType() {
 		case types.APFS_TYPE_INODE:
 			foundInode = true
+			privateID = rec.Val.(types.JInodeVal).PrivateID
 			if rec.Val.(types.JInodeVal).InternalFlags&types.INODE_HAS_UNCOMPRESSED_SIZE != 0 {
 				compressed = true
 				uncompressedSize = rec.Val.(types.JInodeVal).UncompressedSize
@@ -600,19 +604,9 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 					}
 				} else if rec.Val.(types.JXattrValT).Flags.DataStream() {
 					xattrOid := types.OidT(rec.Val.(types.JXattrValT).Data.(types.JXattrDstreamT).XattrObjID)
-					xattrRecords, err := a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, xattrOid, types.XidT(^uint64(0)))
+					rsrcFexts, err = a.resourceForkExtents(xattrOid)
 					if err != nil {
-						return fmt.Errorf("failed to get fs records for oid %#x: %v", xattrOid, err)
-					}
-					for _, xrec := range xattrRecords {
-						switch xrec.Hdr.GetType() {
-						case types.APFS_TYPE_FILE_EXTENT:
-							fexts = append(fexts, types.FileExtent{
-								Address: xrec.Key.(types.JFileExtentKeyT).LogicalAddr,
-								Block:   xrec.Val.(types.JFileExtentValT).PhysBlockNum,
-								Length:  xrec.Val.(types.JFileExtentValT).Length(),
-							})
-						}
+						return fmt.Errorf("failed to get resource fork extents for oid %#x: %v", xattrOid, err)
 					}
 				}
 			case types.XATTR_DECMPFS_EA_NAME:
@@ -629,7 +623,14 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 	if !foundInode {
 		return fmt.Errorf("missing inode for file oid %#x", rec.Val.(types.JDrecVal).FileID)
 	}
-	fileName := rec.Key.(types.JDrecHashedKeyT).Name
+
+	if !compressed && len(fexts) == 0 && fileSize > 0 {
+		fexts, err = a.fextExtents(privateID)
+		if err != nil {
+			return fmt.Errorf("failed to get file-extent tree records for private id %#x: %v", privateID, err)
+		}
+	}
+
 	outPath, ok := safeJoinPath(dest, fileName)
 	if !ok {
 		return fmt.Errorf("unsafe file record name %q in %s", fileName, dest)
@@ -652,7 +653,7 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 	}
 	w := bufio.NewWriter(fo)
 	if compressed {
-		if err := decmpfsHdr.DecompressFile(a.r, w, fexts, false); err != nil {
+		if err := decmpfsHdr.DecompressFile(a.r, w, rsrcFexts, false); err != nil {
 			return fmt.Errorf("failed to decompress and write %s: %v", outPath, err)
 		}
 		expectedSize = uncompressedSize
@@ -685,6 +686,54 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 	log.Debugf("Created %s", outPath)
 
 	return nil
+}
+
+func (a *APFS) fextExtents(privateID uint64) ([]types.FileExtent, error) {
+	if a.Volume == nil || a.Volume.FextTree == nil {
+		return nil, nil
+	}
+	fextRoot, ok := a.Volume.FextTree.Body.(types.BTreeNodePhys)
+	if !ok {
+		return nil, fmt.Errorf("file-extent tree object is %T, not a B-tree node", a.Volume.FextTree.Body)
+	}
+	entries, err := fextRoot.GetFextRecordsForPrivateID(a.r, privateID)
+	if err != nil {
+		return nil, err
+	}
+	fexts := make([]types.FileExtent, 0, len(entries))
+	for _, e := range entries {
+		fexts = append(fexts, types.FileExtent{
+			Address: e.Key.LogicalAddr,
+			Block:   e.Val.PhysBlockNum,
+			Length:  e.Val.Length(),
+		})
+	}
+	return fexts, nil
+}
+
+func (a *APFS) resourceForkExtents(xattrOid types.OidT) ([]types.FileExtent, error) {
+	records, lookupErr := a.fsOMapBtree.GetFSRecordsForOid(a.r, a.FSRootBtree, xattrOid, types.XidT(^uint64(0)))
+	var fexts []types.FileExtent
+	for _, rec := range records {
+		if rec.Hdr.GetType() == types.APFS_TYPE_FILE_EXTENT {
+			fexts = append(fexts, types.FileExtent{
+				Address: rec.Key.(types.JFileExtentKeyT).LogicalAddr,
+				Block:   rec.Val.(types.JFileExtentValT).PhysBlockNum,
+				Length:  rec.Val.(types.JFileExtentValT).Length(),
+			})
+		}
+	}
+	if len(fexts) > 0 {
+		return fexts, nil
+	}
+	fexts, err := a.fextExtents(uint64(xattrOid))
+	if err != nil {
+		return nil, err
+	}
+	if len(fexts) == 0 && lookupErr != nil {
+		return nil, lookupErr
+	}
+	return fexts, nil
 }
 
 // find resolves path to its directory records. A file or symlink resolves to

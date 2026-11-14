@@ -33,7 +33,7 @@ func copyTestEntry(parent, oid uint64, name string, dir bool) types.NodeEntry {
 func copyTestInode(oid uint64, name string) types.NodeEntry {
 	xname := types.Xfield{Field: name}
 	xname.XType = types.INO_EXT_TYPE_NAME
-	xstream := types.Xfield{Field: types.JDstreamT{Size: uint64(len(copyTestData)), TotalBytesWritten: uint64(len(copyTestData))}}
+	xstream := types.Xfield{Field: types.JDstreamT{Size: uint64(len(copyTestData))}}
 	xstream.XType = types.INO_EXT_TYPE_DSTREAM
 	return types.NodeEntry{
 		Hdr: types.JKeyT{ObjIDAndType: oid | uint64(types.APFS_TYPE_INODE)<<types.OBJ_TYPE_SHIFT},
@@ -124,6 +124,18 @@ func TestCopyRejectsMissingInode(t *testing.T) {
 	}
 }
 
+func TestCopyNamesFileByDirectoryEntry(t *testing.T) {
+	records := append([]types.NodeEntry{copyTestEntry(10, 20, "file", false), copyTestExtent(20)}, copyTestInode(20, "../escape"))
+	dest := t.TempDir()
+	if err := copyTestFS(records...).Copy("/source", dest); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dest, "file"))
+	if err != nil || string(data) != copyTestData {
+		t.Fatalf("file = %q, error = %v, want %q", data, err, copyTestData)
+	}
+}
+
 func TestCopyConfinesSymlinks(t *testing.T) {
 	for _, scenario := range []string{"existing file", "existing directory", "nested directory", "image file", "image directory"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -137,7 +149,7 @@ func TestCopyConfinesSymlinks(t *testing.T) {
 			target := outside
 			if strings.HasSuffix(scenario, "file") {
 				target = outsideFile
-				records = []types.NodeEntry{copyTestEntry(10, 30, "escape", false), copyTestInode(30, "file"), copyTestExtent(30)}
+				records = []types.NodeEntry{copyTestEntry(10, 30, "escape", false), copyTestInode(30, "escape"), copyTestExtent(30)}
 			} else {
 				records = []types.NodeEntry{
 					copyTestEntry(10, 30, "escape", true),
@@ -291,6 +303,31 @@ func TestCopyRejectsShortFile(t *testing.T) {
 	}
 }
 
+func TestFextExtentsHandlesUnsealedVolume(t *testing.T) {
+	fs := copyTestFS()
+	fexts, err := fs.fextExtents(20)
+	if err != nil || fexts != nil {
+		t.Fatalf("fextExtents on an unsealed volume = (%v, %v), want (nil, nil)", fexts, err)
+	}
+}
+
+func TestResourceForkExtentsFromFSTree(t *testing.T) {
+	fs := copyTestFS(copyTestExtent(30))
+	fexts, err := fs.resourceForkExtents(30)
+	if err != nil || len(fexts) != 1 {
+		t.Fatalf("resourceForkExtents = (%v, %v), want one extent", fexts, err)
+	}
+}
+
+func TestResourceForkExtentsWithoutFextTree(t *testing.T) {
+	dstreamID := types.NodeEntry{Hdr: types.JKeyT{ObjIDAndType: 30 | uint64(types.APFS_TYPE_DSTREAM_ID)<<types.OBJ_TYPE_SHIFT}}
+	fs := copyTestFS(dstreamID)
+	fexts, err := fs.resourceForkExtents(30)
+	if err != nil || fexts != nil {
+		t.Fatalf("resourceForkExtents = (%v, %v), want (nil, nil)", fexts, err)
+	}
+}
+
 func catStdout(t *testing.T, fs *APFS, path string) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -311,34 +348,17 @@ func catStdout(t *testing.T, fs *APFS, path string) string {
 	return string(out)
 }
 
-func TestCopyNamesFileByDirectoryEntry(t *testing.T) {
-	records := append([]types.NodeEntry{copyTestEntry(10, 20, "file", false), copyTestExtent(20)}, copyTestInode(20, "../escape"))
-	dest := t.TempDir()
-	if err := copyTestFS(records...).Copy("/source", dest); err != nil {
-		t.Fatal(err)
+func TestCatWritesDataForkOnceWithResourceFork(t *testing.T) {
+	const rsrcOid = 21
+	rsrcXattr := types.NodeEntry{
+		Hdr: types.JKeyT{ObjIDAndType: 20 | uint64(types.APFS_TYPE_XATTR)<<types.OBJ_TYPE_SHIFT},
+		Key: types.JXattrKeyT{Name: types.XATTR_RESOURCEFORK_EA_NAME},
+		Val: types.JXattrValT{Flags: types.XATTR_DATA_STREAM, Data: types.JXattrDstreamT{XattrObjID: rsrcOid}},
 	}
-	data, err := os.ReadFile(filepath.Join(dest, "file"))
-	if err != nil || string(data) != copyTestData {
-		t.Fatalf("file = %q, error = %v, want %q", data, err, copyTestData)
-	}
-}
-
-func TestCopyUsesDstreamSize(t *testing.T) {
-	xname := types.Xfield{Field: "file"}
-	xname.XType = types.INO_EXT_TYPE_NAME
-	xstream := types.Xfield{Field: types.JDstreamT{Size: uint64(len(copyTestData)), TotalBytesWritten: 1}}
-	xstream.XType = types.INO_EXT_TYPE_DSTREAM
-	inode := types.NodeEntry{
-		Hdr: types.JKeyT{ObjIDAndType: 20 | uint64(types.APFS_TYPE_INODE)<<types.OBJ_TYPE_SHIFT},
-		Val: types.JInodeVal{Xfields: []types.Xfield{xname, xstream}},
-	}
-	dest := t.TempDir()
-	if err := copyTestFS(copyTestEntry(10, 20, "file", false), inode, copyTestExtent(20)).Copy("/source", dest); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dest, "file"))
-	if err != nil || string(data) != copyTestData {
-		t.Fatalf("file = %q, error = %v, want %q", data, err, copyTestData)
+	rsrcStream := types.NodeEntry{Hdr: types.JKeyT{ObjIDAndType: rsrcOid | uint64(types.APFS_TYPE_DSTREAM_ID)<<types.OBJ_TYPE_SHIFT}}
+	fs := copyTestFS(append(copyTestFile(10, 20, "f"), rsrcXattr, rsrcStream)...)
+	if got := catStdout(t, fs, "/source/f"); got != copyTestData {
+		t.Fatalf("Cat wrote %q, want %q", got, copyTestData)
 	}
 }
 
@@ -368,5 +388,24 @@ func TestCatAndCopyReadEveryExtent(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dest, "file"))
 	if err != nil || string(data) != copyTestData {
 		t.Fatalf("copied file = %q, error = %v, want %q", data, err, copyTestData)
+	}
+}
+
+func TestCopyUsesDstreamSize(t *testing.T) {
+	xname := types.Xfield{Field: "file"}
+	xname.XType = types.INO_EXT_TYPE_NAME
+	xstream := types.Xfield{Field: types.JDstreamT{Size: uint64(len(copyTestData)), TotalBytesWritten: 1}}
+	xstream.XType = types.INO_EXT_TYPE_DSTREAM
+	inode := types.NodeEntry{
+		Hdr: types.JKeyT{ObjIDAndType: 20 | uint64(types.APFS_TYPE_INODE)<<types.OBJ_TYPE_SHIFT},
+		Val: types.JInodeVal{Xfields: []types.Xfield{xname, xstream}},
+	}
+	dest := t.TempDir()
+	if err := copyTestFS(copyTestEntry(10, 20, "file", false), inode, copyTestExtent(20)).Copy("/source", dest); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dest, "file"))
+	if err != nil || string(data) != copyTestData {
+		t.Fatalf("file = %q, error = %v, want %q", data, err, copyTestData)
 	}
 }
