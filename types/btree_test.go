@@ -3,6 +3,7 @@ package types
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"slices"
 	"testing"
 )
@@ -154,6 +155,149 @@ func TestGetFextRecordsForPrivateIDMalformedTree(t *testing.T) {
 			}
 		})
 	}
+}
+
+type searchLeaf struct{ key uint64 }
+
+type searchIndex struct {
+	key   uint64
+	child string
+}
+
+func searchKey(entry any, leaf bool) (uint64, error) {
+	if leaf {
+		e, ok := entry.(searchLeaf)
+		if !ok {
+			return 0, fmt.Errorf("leaf holds a %T", entry)
+		}
+		return e.key, nil
+	}
+	e, ok := entry.(searchIndex)
+	if !ok {
+		return 0, fmt.Errorf("index holds a %T", entry)
+	}
+	return e.key, nil
+}
+
+func searchNode(level uint16, flags btreeNodeFlag, entries ...any) BTreeNodePhys {
+	var n BTreeNodePhys
+	n.Level = level
+	n.Flags = flags
+	n.Nkeys = uint32(len(entries))
+	n.Entries = entries
+	return n
+}
+
+func searchLeafNode(keys ...uint64) BTreeNodePhys {
+	var entries []any
+	for _, k := range keys {
+		entries = append(entries, searchLeaf{k})
+	}
+	return searchNode(0, BTNODE_LEAF, entries...)
+}
+
+func TestSearchTree(t *testing.T) {
+	nodes := map[string]BTreeNodePhys{
+		"L0": searchLeafNode(1, 2),
+		"L1": searchLeafNode(3, 4, 4),
+		"L2": searchLeafNode(4, 5),
+		"L3": searchLeafNode(5, 5, 6),
+		"L4": searchLeafNode(7),
+		"I0": searchNode(1, 0, searchIndex{1, "L0"}, searchIndex{3, "L1"}, searchIndex{4, "L2"}),
+		"I1": searchNode(1, 0, searchIndex{5, "L3"}, searchIndex{7, "L4"}),
+	}
+	root := searchNode(2, BTNODE_ROOT, searchIndex{1, "I0"}, searchIndex{5, "I1"})
+	readChild := func(entry any) (BTreeNodePhys, error) {
+		node, ok := nodes[entry.(searchIndex).child]
+		if !ok {
+			return BTreeNodePhys{}, fmt.Errorf("no node %q", entry.(searchIndex).child)
+		}
+		return node, nil
+	}
+	for _, tt := range []struct {
+		name   string
+		target uint64
+		want   int
+	}{
+		{"first key", 1, 1},
+		{"last key", 7, 1},
+		{"duplicates inside a leaf", 4, 3},
+		{"duplicates across leaves", 5, 3},
+		{"key that starts a leaf", 3, 1},
+		{"key that ends the tree", 7, 1},
+		{"absent before the first key", 0, 0},
+		{"absent between keys", 8, 0},
+		{"absent past the last key", 99, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := searchTree(root, tt.target, searchKey, readChild)
+			if err != nil || len(got) != tt.want {
+				t.Fatalf("got (%d records, %v), want %d records", len(got), err, tt.want)
+			}
+			for _, e := range got {
+				if e.(searchLeaf).key != tt.target {
+					t.Fatalf("got a record with key %d for target %d", e.(searchLeaf).key, tt.target)
+				}
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name string
+		root BTreeNodePhys
+	}{
+		{"level overflow", searchNode(0xFFFF, BTNODE_ROOT, searchIndex{1, "L0"})},
+		{"no leaf within the root level", searchNode(0, BTNODE_ROOT, searchIndex{1, "I0"})},
+		{"index node holding a leaf entry", searchNode(1, BTNODE_ROOT, searchLeaf{1})},
+		{"leaf node holding an index entry", searchNode(0, BTNODE_ROOT|BTNODE_LEAF, searchIndex{1, "L0"})},
+		{"child that does not exist", searchNode(1, BTNODE_ROOT, searchIndex{1, "missing"})},
+		{"child with more keys than entries", func() BTreeNodePhys {
+			nodes["bad"] = searchLeafNode(1)
+			bad := nodes["bad"]
+			bad.Nkeys = 3
+			nodes["bad"] = bad
+			return searchNode(1, BTNODE_ROOT, searchIndex{1, "bad"})
+		}()},
+	} {
+		t.Run("malformed "+tt.name, func(t *testing.T) {
+			if _, err := searchTree(tt.root, 1, searchKey, readChild); err == nil {
+				t.Fatal("got no error")
+			}
+		})
+	}
+}
+
+func fsEntry(oid uint64) NodeEntry {
+	return NodeEntry{Hdr: JKeyT{ObjIDAndType: oid | uint64(APFS_TYPE_INODE)<<OBJ_TYPE_SHIFT}}
+}
+
+func TestGetFSRecordsForOid(t *testing.T) {
+	root := searchNode(0, BTNODE_ROOT|BTNODE_LEAF, fsEntry(10), fsEntry(20), fsEntry(20), fsEntry(30))
+	var omap BTreeNodePhys
+	for _, tt := range []struct {
+		name string
+		oid  OidT
+		want int
+	}{
+		{"single record", 10, 1},
+		{"several records", 20, 2},
+		{"absent between records", 15, 0},
+		{"absent before the first record", 1, 0},
+		{"absent past the last record", 99, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := omap.GetFSRecordsForOid(nil, root, tt.oid, 0)
+			if err != nil || len(got) != tt.want {
+				t.Fatalf("got (%d records, %v), want %d records", len(got), err, tt.want)
+			}
+		})
+	}
+	t.Run("entry that is not a record", func(t *testing.T) {
+		bad := searchNode(0, BTNODE_ROOT|BTNODE_LEAF, searchLeaf{10})
+		if _, err := omap.GetFSRecordsForOid(nil, bad, 10, 0); err == nil {
+			t.Fatal("got no error")
+		}
+	})
 }
 
 func headerlessNode(flags btreeNodeFlag, mutate func([]byte)) []byte {
