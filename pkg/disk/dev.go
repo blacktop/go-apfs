@@ -14,6 +14,11 @@ type Device interface {
 	GetSize() uint64
 }
 
+// RangeWriter is implemented by readers that can copy a whole byte range more efficiently than ReadAt
+type RangeWriter interface {
+	WriteRange(w io.Writer, off, length int64) error
+}
+
 type Generic struct {
 	io.ReaderAt
 	io.Closer
@@ -48,6 +53,14 @@ func (g *Generic) Close() error {
 }
 
 func (g *Generic) ReadFile(w *bufio.Writer, off, length int64) error {
+	return g.WriteRange(w, off, length)
+}
+
+// WriteRange copies length bytes at off to w, delegating to the underlying reader when it is a RangeWriter
+func (g *Generic) WriteRange(w io.Writer, off, length int64) error {
+	if rw, ok := g.ReaderAt.(RangeWriter); ok {
+		return rw.WriteRange(w, off, length)
+	}
 	sr := io.NewSectionReader(g.ReaderAt, off, length)
 	_, err := io.CopyN(w, sr, length)
 	return err
