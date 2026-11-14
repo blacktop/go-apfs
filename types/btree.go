@@ -1160,6 +1160,42 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 	}
 }
 
+func (n *BTreeNodePhys) checkFextNode() error {
+	if uint32(len(n.Entries)) != n.Nkeys {
+		return fmt.Errorf("node has %d entries but %d keys", len(n.Entries), n.Nkeys)
+	}
+	if !n.IsLeaf() && n.Nkeys == 0 {
+		return fmt.Errorf("index node is empty")
+	}
+	for _, entry := range n.Entries {
+		switch entry.(type) {
+		case FextNodeEntry:
+			if !n.IsLeaf() {
+				return fmt.Errorf("index node holds a file-extent record")
+			}
+		case OMapNodeEntry:
+			if n.IsLeaf() {
+				return fmt.Errorf("leaf node holds an index entry")
+			}
+		default:
+			return fmt.Errorf("node holds an unexpected %T entry", entry)
+		}
+	}
+	return nil
+}
+
+func (fextRoot *BTreeNodePhys) readFextChild(r io.ReaderAt, blockAddr uint64) (BTreeNodePhys, error) {
+	node, err := fextRoot.readNodeCached(r, blockAddr, fextRoot.subtype, fextRoot.sealed)
+	if err != nil {
+		return BTreeNodePhys{}, fmt.Errorf("failed to read fext child node: %w", err)
+	}
+	if err := node.checkFextNode(); err != nil {
+		return BTreeNodePhys{}, fmt.Errorf("malformed fext child node at %#x: %w", blockAddr, err)
+	}
+	return node, nil
+}
+
+// GetFextRecordsForPrivateID returns the file-extent records of privateID; an absent ID yields no records and no error
 func (fextRoot *BTreeNodePhys) GetFextRecordsForPrivateID(r io.ReaderAt, privateID uint64) ([]FextNodeEntry, error) {
 	var records []FextNodeEntry
 	var tocEntry OMapNodeEntry
@@ -1167,6 +1203,9 @@ func (fextRoot *BTreeNodePhys) GetFextRecordsForPrivateID(r io.ReaderAt, private
 
 	if fextRoot.Level == math.MaxUint16 {
 		return nil, fmt.Errorf("fext tree level %d is too deep", fextRoot.Level)
+	}
+	if err := fextRoot.checkFextNode(); err != nil {
+		return nil, fmt.Errorf("malformed fext tree root: %w", err)
 	}
 	treeHeight := fextRoot.Level + 1
 	descPath := make([]uint32, treeHeight)
@@ -1181,7 +1220,7 @@ func (fextRoot *BTreeNodePhys) GetFextRecordsForPrivateID(r io.ReaderAt, private
 					break
 				}
 				if leaf.Key.PrivateID > privateID {
-					return nil, fmt.Errorf("no records exist for private id=%#x", privateID)
+					return nil, nil
 				}
 				descPath[i]++
 				continue
@@ -1198,7 +1237,7 @@ func (fextRoot *BTreeNodePhys) GetFextRecordsForPrivateID(r io.ReaderAt, private
 				if uint64(tocEntry.Key.Oid) == privateID {
 					break
 				}
-				return nil, fmt.Errorf("no such records exist for private id=%#x", privateID)
+				return nil, nil
 			}
 			descPath[i]++
 		}
@@ -1211,8 +1250,8 @@ func (fextRoot *BTreeNodePhys) GetFextRecordsForPrivateID(r io.ReaderAt, private
 			descPath[i] = node.Nkeys - 1
 		}
 
-		if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype, fextRoot.sealed); err != nil {
-			return nil, fmt.Errorf("failed to read fext child node: %w", err)
+		if node, err = fextRoot.readFextChild(r, tocEntry.PAddr); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1245,8 +1284,8 @@ descent:
 			}
 
 			tocEntry = node.Entries[descPath[i]].(OMapNodeEntry)
-			if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype, fextRoot.sealed); err != nil {
-				return nil, fmt.Errorf("failed to read fext child node: %w", err)
+			if node, err = fextRoot.readFextChild(r, tocEntry.PAddr); err != nil {
+				return nil, err
 			}
 		}
 		return nil, fmt.Errorf("fext tree has no leaf within its root level %d", fextRoot.Level)

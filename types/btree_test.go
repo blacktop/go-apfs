@@ -64,8 +64,8 @@ func TestGetFextRecordsForPrivateID(t *testing.T) {
 		{"single extent", 10, []uint64{100}, false},
 		{"several extents in order", 20, []uint64{200, 201, 202}, false},
 		{"last entry", 30, []uint64{300}, false},
-		{"absent between entries", 15, nil, true},
-		{"absent before the first entry", 1, nil, true},
+		{"absent between entries", 15, nil, false},
+		{"absent before the first entry", 1, nil, false},
 		{"absent past the last entry", 999, nil, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,6 +107,45 @@ func TestGetFextRecordsForPrivateIDMalformedTree(t *testing.T) {
 		{"leaf root without the root flag", func() BTreeNodePhys {
 			return fextTree(BTNODE_LEAF, fextEntry(10, 100))
 		}, false},
+		{"empty leaf root", func() BTreeNodePhys {
+			return fextTree(BTNODE_ROOT | BTNODE_LEAF)
+		}, false},
+		{"level 0 node without the leaf flag", func() BTreeNodePhys {
+			return fextTree(BTNODE_ROOT, fextEntry(10, 100))
+		}, true},
+		{"leaf node holding index entries", func() BTreeNodePhys {
+			root := fextTree(BTNODE_ROOT | BTNODE_LEAF)
+			root.Nkeys = 1
+			root.Entries = []any{OMapNodeEntry{PAddr: 5}}
+			return root
+		}, true},
+		{"entry that is neither a file-extent record nor an index entry", func() BTreeNodePhys {
+			root := fextTree(BTNODE_ROOT | BTNODE_LEAF)
+			root.Nkeys = 1
+			root.Entries = []any{"entry"}
+			return root
+		}, true},
+		{"more keys than entries", func() BTreeNodePhys {
+			root := fextTree(BTNODE_ROOT|BTNODE_LEAF, fextEntry(10, 100))
+			root.Nkeys = 4
+			return root
+		}, true},
+		{"empty index root", func() BTreeNodePhys {
+			root := fextTree(BTNODE_ROOT)
+			root.Level = 1
+			return root
+		}, true},
+		{"child without the leaf flag holding file-extent records", func() BTreeNodePhys {
+			child := fextTree(0, fextEntry(10, 100))
+			root := BTreeNodePhys{}
+			root.Flags = BTNODE_ROOT
+			root.Level = 1
+			root.Nkeys = 1
+			root.Entries = []any{OMapNodeEntry{PAddr: 5}}
+			root.EnableNodeCache(4)
+			root.nodeCache.Add(5, child)
+			return root
+		}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := tt.build()
