@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"testing"
 )
 
@@ -67,6 +68,50 @@ func TestDecompressLZBitmap(t *testing.T) {
 			}
 			if (err != nil) != tt.err || (!tt.err && !bytes.Equal(out.Bytes(), tt.want)) {
 				t.Fatalf("got (%d bytes, %v), want (%d bytes, error=%v)", out.Len(), err, len(tt.want), tt.err)
+			}
+		})
+	}
+}
+
+const lzbitmapChunkHex = "5a424d097000000004004d000051000051000061706673207365616c656420766f6c756d206170667320343b424950575e656c7a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e4513394c137786f3ef457797833338ffffff01007c034f3fff00f4100000000000000000060000000000"
+
+func lzbitmapChunkPlain() []byte {
+	const unit = "apfs sealed volume "
+	plain := make([]byte, 1024)
+	for i := range plain {
+		plain[i] = unit[i%len(unit)]
+	}
+	for i := 300; i < 340; i++ {
+		plain[i] = byte(i * 7)
+	}
+	return plain
+}
+
+func TestDecompressLZBitmapCompressedChunk(t *testing.T) {
+	compressed, err := hex.DecodeString(lzbitmapChunkHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := lzbitmapChunkPlain()
+	for _, tt := range []struct {
+		name string
+		h    *DecmpfsDiskHeader
+		fork []byte
+	}{
+		{"resource fork", header(CMP_RSRC_LZBITMAP, uint64(len(plain)), nil), chunkedFork(compressed)},
+		{"attribute", header(CMP_ATTR_LZBITMAP, uint64(len(plain)), compressed), nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			w := bufio.NewWriter(&out)
+			if err := tt.h.DecompressFile(bytes.NewReader(tt.fork), w, []FileExtent{{Block: 0, Length: uint64(len(tt.fork))}}, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(out.Bytes(), plain) {
+				t.Fatalf("decoded %d bytes that differ from the %d-byte plaintext", out.Len(), len(plain))
 			}
 		})
 	}
