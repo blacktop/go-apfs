@@ -153,7 +153,7 @@ func NewAPFS(dev disk.Device) (*APFS, error) {
 
 	log.Debugf("File System Root Entry: %s", fsRootEntry)
 
-	fsRootBtreeObj, err := types.ReadBTreeNode(a.r, fsRootEntry.Val.Paddr, types.OBJECT_TYPE_FSTREE)
+	fsRootBtreeObj, err := types.ReadFSTreeNode(a.r, fsRootEntry.Val.Paddr, a.Volume.IncompatibleFeatures&types.APFS_INCOMPAT_SEALED_VOLUME != 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read root btree: %v", err)
 	}

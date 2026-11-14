@@ -162,6 +162,7 @@ type BTreeNodePhys struct {
 	Info    *BTreeInfoT
 
 	subtype objType
+	sealed  bool
 
 	RootOid OidT
 
@@ -878,13 +879,13 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 
 // readNodeCached returns the verified B-tree node at blockAddr, consulting
 // the node cache when one is enabled.
-func (n *BTreeNodePhys) readNodeCached(r io.ReaderAt, blockAddr uint64, subtype objType) (BTreeNodePhys, error) {
+func (n *BTreeNodePhys) readNodeCached(r io.ReaderAt, blockAddr uint64, subtype objType, sealed bool) (BTreeNodePhys, error) {
 	if n.nodeCache != nil {
 		if node, ok := n.nodeCache.Get(blockAddr); ok {
 			return node, nil
 		}
 	}
-	o, err := ReadBTreeNode(r, blockAddr, subtype)
+	o, err := readObj(r, blockAddr, subtype, sealed)
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to read B-tree node at %#x: %w", blockAddr, err)
 	}
@@ -939,7 +940,7 @@ func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMa
 			}
 			return &tocEntry, nil
 		}
-		child, err := n.readNodeCached(r, uint64(tocEntry.PAddr), n.subtype)
+		child, err := n.readNodeCached(r, uint64(tocEntry.PAddr), n.subtype, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read omap child: %w", err)
 		}
@@ -965,7 +966,7 @@ func childOidFromIndexValue(val any, rootOid OidT, hashed bool) (OidT, error) {
 
 // readChildNode resolves an FS-tree index entry (whose value is a virtual
 // OID) through the omap and returns the decoded child node.
-func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid XidT, rootOid OidT, hashed bool, subtype objType) (BTreeNodePhys, error) {
+func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid XidT, rootOid OidT, hashed bool, subtype objType, sealed bool) (BTreeNodePhys, error) {
 	childOid, err := childOidFromIndexValue(entry.Val, rootOid, hashed)
 	if err != nil {
 		return BTreeNodePhys{}, err
@@ -974,7 +975,7 @@ func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid Xid
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to get omap entry for oid %#x: %w", childOid, err)
 	}
-	child, err := n.readNodeCached(r, omapEntry.Val.Paddr, subtype)
+	child, err := n.readNodeCached(r, omapEntry.Val.Paddr, subtype, sealed)
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to read child of oid %#x: %w", childOid, err)
 	}
@@ -1082,7 +1083,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 			descPath[i] = node.Nkeys - 1
 		}
 
-		if node, err = n.readChildNode(r, tocEntry, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype); err != nil {
+		if node, err = n.readChildNode(r, tocEntry, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype, volFsRootNode.sealed); err != nil {
 			return nil, err
 		}
 	}
@@ -1152,7 +1153,7 @@ func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNod
 
 			tocEntry = node.Entries[descPath[i]].(NodeEntry)
 
-			if node, err = n.readChildNode(r, tocEntry, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype); err != nil {
+			if node, err = n.readChildNode(r, tocEntry, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype, volFsRootNode.sealed); err != nil {
 				return nil, err
 			}
 		}
@@ -1210,7 +1211,7 @@ func (fextRoot *BTreeNodePhys) GetFextRecordsForPrivateID(r io.ReaderAt, private
 			descPath[i] = node.Nkeys - 1
 		}
 
-		if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype); err != nil {
+		if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype, fextRoot.sealed); err != nil {
 			return nil, fmt.Errorf("failed to read fext child node: %w", err)
 		}
 	}
@@ -1244,7 +1245,7 @@ descent:
 			}
 
 			tocEntry = node.Entries[descPath[i]].(OMapNodeEntry)
-			if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype); err != nil {
+			if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype, fextRoot.sealed); err != nil {
 				return nil, fmt.Errorf("failed to read fext child node: %w", err)
 			}
 		}
