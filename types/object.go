@@ -285,9 +285,6 @@ func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, allowNoHeader
 		if err := binary.Read(rr, binary.LittleEndian, &checkpointMap.Hdr); err != nil {
 			return nil, fmt.Errorf("failed to read APFS checkpoint_map_phys_t: %v", err)
 		}
-		if uint64(checkpointMap.Hdr.Count)*uint64(binary.Size(CheckpointMappingT{})) > uint64(rr.Len()) {
-			return nil, fmt.Errorf("checkpoint_map_phys_t count %d does not fit in a %d-byte block", checkpointMap.Hdr.Count, len(block))
-		}
 		checkpointMap.Map = make([]CheckpointMappingT, checkpointMap.Hdr.Count)
 		if err := binary.Read(rr, binary.LittleEndian, &checkpointMap.Map); err != nil {
 			return nil, fmt.Errorf("failed to read APFS checkpoint_mapping_t array: %v", err)

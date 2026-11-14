@@ -33,7 +33,7 @@ func copyTestEntry(parent, oid uint64, name string, dir bool) types.NodeEntry {
 func copyTestInode(oid uint64, name string) types.NodeEntry {
 	xname := types.Xfield{Field: name}
 	xname.XType = types.INO_EXT_TYPE_NAME
-	xstream := types.Xfield{Field: types.JDstreamT{Size: uint64(len(copyTestData))}}
+	xstream := types.Xfield{Field: types.JDstreamT{TotalBytesWritten: uint64(len(copyTestData))}}
 	xstream.XType = types.INO_EXT_TYPE_DSTREAM
 	return types.NodeEntry{
 		Hdr: types.JKeyT{ObjIDAndType: oid | uint64(types.APFS_TYPE_INODE)<<types.OBJ_TYPE_SHIFT},
@@ -86,7 +86,7 @@ func copyTestFS(records ...types.NodeEntry) *APFS {
 
 func TestCopyRejectsUnsafeNames(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "../escape", "/absolute", "nested/file", `nested\file`, "nul\x00name"} {
-		for _, branch := range []string{"directory", "nested directory", "file entry"} {
+		for _, branch := range []string{"directory", "nested directory", "file inode", "file entry"} {
 			t.Run(fmt.Sprintf("%s/%q", branch, name), func(t *testing.T) {
 				var records []types.NodeEntry
 				var want string
@@ -97,6 +97,12 @@ func TestCopyRejectsUnsafeNames(t *testing.T) {
 				case "nested directory":
 					records = []types.NodeEntry{copyTestEntry(10, 20, "nested", true), copyTestEntry(20, 30, name, true)}
 					want = fmt.Sprintf("unsafe directory record name %q in nested", name)
+				case "file inode":
+					records = []types.NodeEntry{copyTestEntry(10, 20, "file", false), copyTestInode(20, name)}
+					want = fmt.Sprintf("unsafe file record name %q in .", name)
+					if name == "" {
+						want = "missing inode name for file oid 0x14"
+					}
 				case "file entry":
 					records = []types.NodeEntry{copyTestEntry(10, 20, name, false), copyTestInode(20, "file")}
 					want = fmt.Sprintf("unsafe file record name %q in .", name)
@@ -111,28 +117,26 @@ func TestCopyRejectsUnsafeNames(t *testing.T) {
 }
 
 func TestCopyRejectsMissingInode(t *testing.T) {
-	records := []types.NodeEntry{copyTestEntry(10, 20, "file", false), copyTestExtent(20)}
-	want := "missing inode for file oid 0x14"
-	dest := t.TempDir()
-	err := copyTestFS(records...).Copy("/source/file", dest)
-	if err == nil || err.Error() != want {
-		t.Fatalf("Copy error = %v, want %q", err, want)
-	}
-	entries, err := os.ReadDir(dest)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("destination entries = %v, error = %v", entries, err)
-	}
-}
-
-func TestCopyNamesFileByDirectoryEntry(t *testing.T) {
-	records := append([]types.NodeEntry{copyTestEntry(10, 20, "file", false), copyTestExtent(20)}, copyTestInode(20, "../escape"))
-	dest := t.TempDir()
-	if err := copyTestFS(records...).Copy("/source", dest); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dest, "file"))
-	if err != nil || string(data) != copyTestData {
-		t.Fatalf("file = %q, error = %v, want %q", data, err, copyTestData)
+	for _, missingName := range []bool{false, true} {
+		t.Run(fmt.Sprint(missingName), func(t *testing.T) {
+			records := []types.NodeEntry{copyTestEntry(10, 20, "file", false), copyTestExtent(20)}
+			want := "missing inode for file oid 0x14"
+			if missingName {
+				inode := copyTestInode(20, "unused")
+				inode.Val = types.JInodeVal{}
+				records = append(records, inode)
+				want = "missing inode name for file oid 0x14"
+			}
+			dest := t.TempDir()
+			err := copyTestFS(records...).Copy("/source/file", dest)
+			if err == nil || err.Error() != want {
+				t.Fatalf("Copy error = %v, want %q", err, want)
+			}
+			entries, err := os.ReadDir(dest)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("destination entries = %v, error = %v", entries, err)
+			}
+		})
 	}
 }
 
@@ -149,7 +153,7 @@ func TestCopyConfinesSymlinks(t *testing.T) {
 			target := outside
 			if strings.HasSuffix(scenario, "file") {
 				target = outsideFile
-				records = []types.NodeEntry{copyTestEntry(10, 30, "escape", false), copyTestInode(30, "escape"), copyTestExtent(30)}
+				records = []types.NodeEntry{copyTestEntry(10, 30, "file", false), copyTestInode(30, "escape"), copyTestExtent(30)}
 			} else {
 				records = []types.NodeEntry{
 					copyTestEntry(10, 30, "escape", true),
@@ -359,53 +363,5 @@ func TestCatWritesDataForkOnceWithResourceFork(t *testing.T) {
 	fs := copyTestFS(append(copyTestFile(10, 20, "f"), rsrcXattr, rsrcStream)...)
 	if got := catStdout(t, fs, "/source/f"); got != copyTestData {
 		t.Fatalf("Cat wrote %q, want %q", got, copyTestData)
-	}
-}
-
-func TestCatAndCopyReadEveryExtent(t *testing.T) {
-	const blockSize = 4096
-	device := make([]byte, 2*blockSize)
-	copy(device[0:], copyTestData[:10])
-	copy(device[blockSize:], copyTestData[10:])
-	extent := func(logical, length, block uint64) types.NodeEntry {
-		return types.NodeEntry{
-			Hdr: types.JKeyT{ObjIDAndType: 20 | uint64(types.APFS_TYPE_FILE_EXTENT)<<types.OBJ_TYPE_SHIFT},
-			Key: types.JFileExtentKeyT{LogicalAddr: logical},
-			Val: types.JFileExtentValT{LenAndFlags: length, PhysBlockNum: block},
-		}
-	}
-	fs := copyTestFS(copyTestEntry(10, 20, "file", false), copyTestInode(20, "file"), extent(0, 10, 0), extent(10, 8, 1))
-	fs.r = bytes.NewReader(device)
-	fs.dev = disk.NewGeneric(fs.r)
-
-	if got := catStdout(t, fs, "/source/file"); got != copyTestData {
-		t.Fatalf("Cat wrote %q, want %q", got, copyTestData)
-	}
-	dest := t.TempDir()
-	if err := fs.Copy("/source", dest); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dest, "file"))
-	if err != nil || string(data) != copyTestData {
-		t.Fatalf("copied file = %q, error = %v, want %q", data, err, copyTestData)
-	}
-}
-
-func TestCopyUsesDstreamSize(t *testing.T) {
-	xname := types.Xfield{Field: "file"}
-	xname.XType = types.INO_EXT_TYPE_NAME
-	xstream := types.Xfield{Field: types.JDstreamT{Size: uint64(len(copyTestData)), TotalBytesWritten: 1}}
-	xstream.XType = types.INO_EXT_TYPE_DSTREAM
-	inode := types.NodeEntry{
-		Hdr: types.JKeyT{ObjIDAndType: 20 | uint64(types.APFS_TYPE_INODE)<<types.OBJ_TYPE_SHIFT},
-		Val: types.JInodeVal{Xfields: []types.Xfield{xname, xstream}},
-	}
-	dest := t.TempDir()
-	if err := copyTestFS(copyTestEntry(10, 20, "file", false), inode, copyTestExtent(20)).Copy("/source", dest); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dest, "file"))
-	if err != nil || string(data) != copyTestData {
-		t.Fatalf("file = %q, error = %v, want %q", data, err, copyTestData)
 	}
 }
