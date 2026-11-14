@@ -64,8 +64,8 @@ func TestGetFextRecordsForPrivateID(t *testing.T) {
 		{"single extent", 10, []uint64{100}, false},
 		{"several extents in order", 20, []uint64{200, 201, 202}, false},
 		{"last entry", 30, []uint64{300}, false},
-		{"absent between entries", 15, nil, true},
-		{"absent before the first entry", 1, nil, true},
+		{"absent between entries", 15, nil, false},
+		{"absent before the first entry", 1, nil, false},
 		{"absent past the last entry", 999, nil, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,6 +107,9 @@ func TestGetFextRecordsForPrivateIDMalformedTree(t *testing.T) {
 		{"leaf root without the root flag", func() BTreeNodePhys {
 			return fextTree(BTNODE_LEAF, fextEntry(10, 100))
 		}, false},
+		{"leaf entries in a node without the leaf flag", func() BTreeNodePhys {
+			return fextTree(BTNODE_ROOT, fextEntry(10, 100))
+		}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := tt.build()
@@ -122,14 +125,28 @@ func TestReadBTreeNodeNoHeader(t *testing.T) {
 	block := make([]byte, NX_DEFAULT_BLOCK_SIZE)
 	binary.LittleEndian.PutUint16(block[32:], uint16(BTNODE_ROOT|BTNODE_LEAF|BTNODE_NOHEADER))
 
-	o, err := ReadBTreeNode(bytes.NewReader(block), 0, OBJECT_TYPE_FSTREE)
+	o, err := ReadFSTreeNode(bytes.NewReader(block), 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.Hdr.GetType() != OBJECT_TYPE_BTREE_NODE || o.Hdr.GetSubType() != OBJECT_TYPE_FSTREE {
 		t.Fatalf("got type %s/%s, want btree node/fstree", o.Hdr.GetType(), o.Hdr.GetSubType())
 	}
+	if o.Body.(BTreeNodePhys).sealed != true {
+		t.Fatal("sealed flag was not kept on the root node")
+	}
+	if _, err := ReadFSTreeNode(bytes.NewReader(block), 0, false); err == nil {
+		t.Fatal("unsealed volume accepted a header-less FS tree node")
+	}
+	if _, err := ReadBTreeNode(bytes.NewReader(block), 0, OBJECT_TYPE_FSTREE); err == nil {
+		t.Fatal("strict reader accepted a header-less node")
+	}
 	if _, err := ReadObj(bytes.NewReader(block), 0); err == nil {
 		t.Fatal("ReadObj decoded a header-less node")
+	}
+
+	block[0] = 1
+	if _, err := ReadFSTreeNode(bytes.NewReader(block), 0, true); err == nil {
+		t.Fatal("sealed volume accepted a node whose object header is not all zero")
 	}
 }

@@ -162,6 +162,7 @@ type BTreeNodePhys struct {
 	Info    *BTreeInfoT
 
 	subtype objType
+	sealed  bool
 
 	RootOid OidT
 
@@ -878,13 +879,13 @@ func (n *BTreeNodePhys) ReadNodeEntry(r *bytes.Reader) error {
 
 // readNodeCached returns the verified B-tree node at blockAddr, consulting
 // the node cache when one is enabled.
-func (n *BTreeNodePhys) readNodeCached(r io.ReaderAt, blockAddr uint64, subtype objType) (BTreeNodePhys, error) {
+func (n *BTreeNodePhys) readNodeCached(r io.ReaderAt, blockAddr uint64, subtype objType, sealed bool) (BTreeNodePhys, error) {
 	if n.nodeCache != nil {
 		if node, ok := n.nodeCache.Get(blockAddr); ok {
 			return node, nil
 		}
 	}
-	o, err := ReadBTreeNode(r, blockAddr, subtype)
+	o, err := readObj(r, blockAddr, subtype, sealed)
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to read B-tree node at %#x: %w", blockAddr, err)
 	}
@@ -939,7 +940,7 @@ func (n *BTreeNodePhys) GetOMapEntry(r io.ReaderAt, oid OidT, maxXid XidT) (*OMa
 			}
 			return &tocEntry, nil
 		}
-		child, err := n.readNodeCached(r, uint64(tocEntry.PAddr), n.subtype)
+		child, err := n.readNodeCached(r, uint64(tocEntry.PAddr), n.subtype, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read omap child: %w", err)
 		}
@@ -965,7 +966,7 @@ func childOidFromIndexValue(val any, rootOid OidT, hashed bool) (OidT, error) {
 
 // readChildNode resolves an FS-tree index entry (whose value is a virtual
 // OID) through the omap and returns the decoded child node.
-func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid XidT, rootOid OidT, hashed bool, subtype objType) (BTreeNodePhys, error) {
+func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid XidT, rootOid OidT, hashed bool, subtype objType, sealed bool) (BTreeNodePhys, error) {
 	childOid, err := childOidFromIndexValue(entry.Val, rootOid, hashed)
 	if err != nil {
 		return BTreeNodePhys{}, err
@@ -974,7 +975,7 @@ func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid Xid
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to get omap entry for oid %#x: %w", childOid, err)
 	}
-	child, err := n.readNodeCached(r, omapEntry.Val.Paddr, subtype)
+	child, err := n.readNodeCached(r, omapEntry.Val.Paddr, subtype, sealed)
 	if err != nil {
 		return BTreeNodePhys{}, fmt.Errorf("failed to read child of oid %#x: %w", childOid, err)
 	}
@@ -983,271 +984,155 @@ func (n *BTreeNodePhys) readChildNode(r io.ReaderAt, entry NodeEntry, maxXid Xid
 
 // GetFSRecordsForOid returns an array of all the file-system records with a given Virtual OID from a given file-system root tree.
 func (n *BTreeNodePhys) GetFSRecordsForOid(r io.ReaderAt, volFsRootNode BTreeNodePhys, oid OidT, maxXid XidT) (FSRecords, error) {
-
-	var records FSRecords
-	var tocEntry NodeEntry
-	var err error
-
-	treeHeight := volFsRootNode.Level + 1
-	descPath := make([]uint32, treeHeight)
-
-	node := volFsRootNode
-
-	for i := range treeHeight {
-		for idx, entry := range node.Entries {
-
-			tocEntry = entry.(NodeEntry)
-
-			if node.IsLeaf() {
-				if tocEntry.Hdr.GetID() == uint64(oid) {
-					/**
-					 * This is the first matching record, and `desc_path`
-					 * now describes the path to it in the tree.
-					 */
-					break
-				}
-				if tocEntry.Hdr.GetID() > uint64(oid) {
-					/**
-					 * If a record with the desired OID existed, we would've
-					 * encountered it by now, so no such records exist.
-					 */
-					return nil, fmt.Errorf("no records exist for oid=%#x", oid)
-				}
-				descPath[i]++
-				continue
-			}
-
-			if tocEntry.Hdr.GetID() >= uint64(oid) {
-				if descPath[i] != 0 {
-					/**
-					 * We've encountered the first entry in this non-leaf node
-					 * whose key states an OID that is greater than or equal to the
-					 * desired OID. Thus, if this *isn't* the first entry in this
-					 * node, we descend the previous entry, as a record with the
-					 * desired OID may exist in that sub-tree.
-					 */
-					descPath[i]--
-					idx--
-					tocEntry = node.Entries[idx].(NodeEntry)
-					break
-				}
-
-				if tocEntry.Hdr.GetID() == uint64(oid) {
-					/**
-					 * However, if this *is* the first entry in this node, we only
-					 * descend it if its key's stated OID matches the desired OID;
-					 * else it exceeds the desired OID, and thus no records with the
-					 * desired OID exist *in the whole tree*.
-					 */
-					break
-				}
-
-				return nil, fmt.Errorf("no such records exist for oid=%#x", oid)
-			}
-
-			descPath[i]++
+	entries, err := searchTree(&volFsRootNode, uint64(oid), func(entry any, _ bool) (uint64, error) {
+		rec, ok := entry.(NodeEntry)
+		if !ok {
+			return 0, fmt.Errorf("B-tree entry is %T, not an FS record", entry)
 		}
-
-		/**
-		 * One of the following is now true about `toc_entry`:
-		 *
-		 * (a) it points directly after the last TOC entry, in which case:
-		 *      (i)  if this is a leaf node, we're looking at it because the
-		 *              first record in the *next* leaf node has the desired
-		 *              OID, or no records with the desired OID exist in the
-		 *              whole tree. We just break from the descent loop, and the
-		 *              walk loop will handle the current value of `desc_path`
-		 *              correctly.
-		 *      (ii) if this is a non-leaf node, we should descend the last
-		 *              entry.
-		 * (b) it points to the correct entry to descend.
-		 */
-
-		/**
-		 * If this is a leaf node, then we have finished descending the tree,
-		 * and `desc_path` describes the path to the first record with the
-		 * desired OID. We break from this while-loop (the descent loop) and
-		 * enter the next while-loop (the walk loop), which should behave
-		 * correctly based on the vale of `desc_path`.
-		 *
-		 * This handles case (a)(i) above, and also case (b) when we're looking
-		 * at a leaf node.
-		 */
-		if node.IsLeaf() {
-			break
+		return rec.Hdr.GetID(), nil
+	}, func(entry any) (BTreeNodePhys, error) {
+		rec, ok := entry.(NodeEntry)
+		if !ok {
+			return BTreeNodePhys{}, fmt.Errorf("B-tree index entry is %T, not an FS record", entry)
 		}
-
-		/** Convert case (a)(ii) to case (b) */
-		if descPath[i] >= node.Nkeys {
-			descPath[i] = node.Nkeys - 1
-		}
-
-		if node, err = n.readChildNode(r, tocEntry, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype); err != nil {
-			return nil, err
-		}
+		return n.readChildNode(r, rec, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype, volFsRootNode.sealed)
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	for {
-
-		node = volFsRootNode
-
-		for i := range treeHeight {
-
-			/**
-			 * If `desc_path[i]` isn't a valid entry index in this node, that
-			 * means we've already looked at all the entries in this node, and
-			 * should look at the next node on this level.
-			 */
-			if descPath[i] >= node.Nkeys {
-				/**
-				 * If this is a root node, then there are no other nodes on this
-				 * level; we've gone through the whole tree, return the results.
-				 */
-				if node.IsRoot() {
-					return records, nil
-				}
-
-				/**
-				 * Else, we adjust the value of `desc_path` so that it refers
-				 * to the leftmost descendant of the next node on this level.
-				 * We then break from this for-loop so that we loop inside the
-				 * while-loop (the walk loop), which will result in us making
-				 * a new descent from the root based on the new value of
-				 * `desc_path`.
-				 */
-				descPath[i-1]++
-				for j := uint16(i); j < treeHeight; j++ {
-					descPath[j] = 0
-				}
-				break
-			}
-
-			/**
-			 * Handle leaf nodes:
-			 * The entry we're looking at is the next record, so add it to the
-			 * records array, then adjust `desc_path` and loop.
-			 */
-			if node.IsLeaf() {
-				for idx := descPath[i]; idx < node.Nkeys; idx++ {
-
-					tocEntry = node.Entries[idx].(NodeEntry)
-
-					if tocEntry.Hdr.GetID() != uint64(oid) {
-						// This record doesn't have the right OID, so we must have
-						// found all of the relevant records; return the results
-						return records, nil
-					}
-
-					records = append(records, tocEntry)
-					descPath[i]++
-				}
-				/**
-				 * We've run off the end of this leaf node, and `desc_path` now
-				 * refers to the first record of the next leaf node.
-				 * Loop so that we correctly make a new descent to that record
-				 * from the root node.
-				 */
-				break
-			}
-
-			tocEntry = node.Entries[descPath[i]].(NodeEntry)
-
-			if node, err = n.readChildNode(r, tocEntry, maxXid, volFsRootNode.RootOid, volFsRootNode.treeHashed(), volFsRootNode.subtype); err != nil {
-				return nil, err
-			}
-		}
+	records := make(FSRecords, 0, len(entries))
+	for _, entry := range entries {
+		records = append(records, entry.(NodeEntry))
 	}
+	return records, nil
 }
 
 func (fextRoot *BTreeNodePhys) GetFextRecordsForPrivateID(r io.ReaderAt, privateID uint64) ([]FextNodeEntry, error) {
-	var records []FextNodeEntry
-	var tocEntry OMapNodeEntry
-	var err error
-
-	if fextRoot.Level == math.MaxUint16 {
-		return nil, fmt.Errorf("fext tree level %d is too deep", fextRoot.Level)
+	entries, err := searchTree(fextRoot, privateID, func(entry any, leaf bool) (uint64, error) {
+		if leaf {
+			rec, ok := entry.(FextNodeEntry)
+			if !ok {
+				return 0, fmt.Errorf("fext tree leaf entry is %T", entry)
+			}
+			return rec.Key.PrivateID, nil
+		}
+		idx, ok := entry.(OMapNodeEntry)
+		if !ok {
+			return 0, fmt.Errorf("fext tree index entry is %T", entry)
+		}
+		return uint64(idx.Key.Oid), nil
+	}, func(entry any) (BTreeNodePhys, error) {
+		idx, ok := entry.(OMapNodeEntry)
+		if !ok {
+			return BTreeNodePhys{}, fmt.Errorf("fext tree index entry is %T", entry)
+		}
+		return fextRoot.readNodeCached(r, uint64(idx.PAddr), fextRoot.subtype, fextRoot.sealed)
+	})
+	if err != nil {
+		return nil, err
 	}
-	treeHeight := fextRoot.Level + 1
-	descPath := make([]uint32, treeHeight)
+	records := make([]FextNodeEntry, 0, len(entries))
+	for _, entry := range entries {
+		records = append(records, entry.(FextNodeEntry))
+	}
+	return records, nil
+}
 
-	node := *fextRoot
+// searchTree returns the leaf entries of the tree rooted at root whose key is key, in tree order.
+// An absent key yields no entries. keyOf reports an entry's key and whether it sits in a leaf, and
+// child resolves an index entry to its child node.
+func searchTree(root *BTreeNodePhys, key uint64, keyOf func(entry any, leaf bool) (uint64, error), child func(entry any) (BTreeNodePhys, error)) ([]any, error) {
+	if root.Level == math.MaxUint16 {
+		return nil, fmt.Errorf("B-tree level %d is too deep", root.Level)
+	}
+	height := int(root.Level) + 1
+	descPath := make([]int, height)
 
-	for i := range treeHeight {
-		for idx, entry := range node.Entries {
-			if node.IsLeaf() {
-				leaf := entry.(FextNodeEntry)
-				if leaf.Key.PrivateID == privateID {
+	node := *root
+	reachedLeaf := false
+	for i := range height {
+		if len(node.Entries) != int(node.Nkeys) {
+			return nil, fmt.Errorf("B-tree node has %d entries for %d keys", len(node.Entries), node.Nkeys)
+		}
+		leaf := node.IsLeaf()
+		for _, entry := range node.Entries {
+			k, err := keyOf(entry, leaf)
+			if err != nil {
+				return nil, err
+			}
+			if leaf {
+				if k == key {
 					break
 				}
-				if leaf.Key.PrivateID > privateID {
-					return nil, fmt.Errorf("no records exist for private id=%#x", privateID)
+				if k > key {
+					return nil, nil
 				}
 				descPath[i]++
 				continue
 			}
-
-			tocEntry = entry.(OMapNodeEntry)
-			if uint64(tocEntry.Key.Oid) >= privateID {
+			if k >= key {
 				if descPath[i] != 0 {
 					descPath[i]--
-					idx--
-					tocEntry = node.Entries[idx].(OMapNodeEntry)
 					break
 				}
-				if uint64(tocEntry.Key.Oid) == privateID {
+				if k == key {
 					break
 				}
-				return nil, fmt.Errorf("no such records exist for private id=%#x", privateID)
+				return nil, nil
 			}
 			descPath[i]++
 		}
-
-		if node.IsLeaf() {
+		if leaf {
+			reachedLeaf = true
 			break
 		}
-
-		if descPath[i] >= node.Nkeys {
-			descPath[i] = node.Nkeys - 1
+		if node.Nkeys == 0 {
+			return nil, fmt.Errorf("B-tree index node has no keys")
 		}
-
-		if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype); err != nil {
-			return nil, fmt.Errorf("failed to read fext child node: %w", err)
+		descPath[i] = min(descPath[i], int(node.Nkeys)-1)
+		next, err := child(node.Entries[descPath[i]])
+		if err != nil {
+			return nil, err
 		}
+		node = next
+	}
+	if !reachedLeaf {
+		return nil, fmt.Errorf("B-tree has no leaf within its root level %d", root.Level)
 	}
 
-descent:
+	var records []any
 	for {
-		node = *fextRoot
-
-		for i := range treeHeight {
-			if descPath[i] >= node.Nkeys {
+		node = *root
+		for i := range height {
+			if descPath[i] >= int(node.Nkeys) {
 				if i == 0 || node.IsRoot() {
 					return records, nil
 				}
 				descPath[i-1]++
-				for j := uint16(i); j < treeHeight; j++ {
+				for j := i; j < height; j++ {
 					descPath[j] = 0
 				}
-				continue descent
+				break
 			}
-
 			if node.IsLeaf() {
-				for idx := descPath[i]; idx < node.Nkeys; idx++ {
-					leaf := node.Entries[idx].(FextNodeEntry)
-					if leaf.Key.PrivateID != privateID {
+				for idx := descPath[i]; idx < int(node.Nkeys); idx++ {
+					k, err := keyOf(node.Entries[idx], true)
+					if err != nil {
+						return nil, err
+					}
+					if k != key {
 						return records, nil
 					}
-					records = append(records, leaf)
+					records = append(records, node.Entries[idx])
 					descPath[i]++
 				}
-				continue descent
+				break
 			}
-
-			tocEntry = node.Entries[descPath[i]].(OMapNodeEntry)
-			if node, err = fextRoot.readNodeCached(r, tocEntry.PAddr, fextRoot.subtype); err != nil {
-				return nil, fmt.Errorf("failed to read fext child node: %w", err)
+			next, err := child(node.Entries[descPath[i]])
+			if err != nil {
+				return nil, err
 			}
+			node = next
 		}
-		return nil, fmt.Errorf("fext tree has no leaf within its root level %d", fextRoot.Level)
 	}
 }

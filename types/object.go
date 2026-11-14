@@ -133,15 +133,22 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 }
 
 func ReadBTreeNode(r io.ReaderAt, blockAddr uint64, subtype objType) (*Obj, error) {
-	return readObj(r, blockAddr, subtype, true)
+	return readObj(r, blockAddr, subtype, false)
 }
 
+// ReadFSTreeNode reads the root node of a volume's filesystem tree.
+func ReadFSTreeNode(r io.ReaderAt, blockAddr uint64, sealed bool) (*Obj, error) {
+	return readObj(r, blockAddr, OBJECT_TYPE_FSTREE, sealed)
+}
+
+var zeroObjHeader [32]byte
+
 func isNoHeaderBTreeNode(block []byte) bool {
-	return binary.LittleEndian.Uint32(block[24:28]) == 0 &&
+	return bytes.Equal(block[:32], zeroObjHeader[:]) &&
 		btreeNodeFlag(binary.LittleEndian.Uint16(block[32:34]))&BTNODE_NOHEADER != 0
 }
 
-func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, allowNoHeader bool) (*Obj, error) {
+func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, sealed bool) (*Obj, error) {
 
 	var err error
 	var o Obj
@@ -152,6 +159,7 @@ func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, allowNoHeader
 		return nil, fmt.Errorf("failed to read object block data at block address %#x: %v", blockAddr, err)
 	}
 
+	allowNoHeader := sealed && (treeSubtype == OBJECT_TYPE_FSTREE || treeSubtype == OBJECT_TYPE_FEXT_TREE)
 	noHeader := allowNoHeader && isNoHeaderBTreeNode(block)
 	if !noHeader && !VerifyChecksum(block) {
 		return nil, fmt.Errorf("obj_phys_t data block failed checksum validation: %w", ErrBadBlockChecksum)
@@ -191,6 +199,7 @@ func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, allowNoHeader
 			return nil, fmt.Errorf("failed to read btree_node_phys_t struct: %v", err)
 		}
 		node.subtype = o.Hdr.GetSubType()
+		node.sealed = sealed
 		if node.Nkeys > 0 {
 			switch o.Hdr.GetSubType() {
 			case OBJECT_TYPE_OMAP:
@@ -217,6 +226,9 @@ func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, allowNoHeader
 			// case OBJECT_TYPE_FSTREE:
 			// 	fallthrough
 			case OBJECT_TYPE_FEXT_TREE:
+				if (node.Level > 0) == node.IsLeaf() {
+					return nil, fmt.Errorf("fext tree node at level %d disagrees with its leaf flag", node.Level)
+				}
 				if node.Level > 0 {
 					for i := uint32(0); i < node.Nkeys; i++ {
 						err := node.ReadOMapNodeEntry(rr)
@@ -320,7 +332,7 @@ func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, allowNoHeader
 			}
 		}
 		if apsb.FextTreeOid > 0 {
-			apsb.FextTree, err = ReadBTreeNode(r, uint64(apsb.FextTreeOid), OBJECT_TYPE_FEXT_TREE)
+			apsb.FextTree, err = readObj(r, uint64(apsb.FextTreeOid), OBJECT_TYPE_FEXT_TREE, apsb.IncompatibleFeatures&APFS_INCOMPAT_SEALED_VOLUME != 0)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read root node of the file-extent tree at block %#x: %v", apsb.FextTreeOid, err)
 			}
@@ -358,12 +370,12 @@ func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, allowNoHeader
 		fallthrough
 	case OBJECT_TYPE_SNAP_META_EXT:
 		fallthrough
-	case OBJECT_TYPE_FEXT_TREE:
-		fallthrough
 	case OBJECT_TYPE_INTEGRITY_META:
 		fallthrough
 	case OBJECT_TYPE_RESERVED_20:
 		panic("not implimented yet")
+	case OBJECT_TYPE_FEXT_TREE:
+		return nil, fmt.Errorf("object type %s is only valid as a B-tree subtype", o.Hdr.GetType())
 	default:
 		return nil, fmt.Errorf("unknown or unsupported obj header type %s @ oid=%#x", o.Hdr.GetType(), blockAddr)
 	}
