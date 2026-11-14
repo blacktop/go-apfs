@@ -129,6 +129,27 @@ func (o Obj) String() string {
 
 // ReadObj returns a verified object or error if block does not verify
 func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
+	return readObj(r, blockAddr, OBJECT_TYPE_INVALID, false)
+}
+
+// ReadBTreeNode returns a verified B-tree node or error if block does not verify
+func ReadBTreeNode(r io.ReaderAt, blockAddr uint64, subtype objType) (*Obj, error) {
+	return readObj(r, blockAddr, subtype, false)
+}
+
+// ReadFSTreeNode returns a verified file-system tree node; a sealed volume may store it without an object header
+func ReadFSTreeNode(r io.ReaderAt, blockAddr uint64, sealed bool) (*Obj, error) {
+	return readObj(r, blockAddr, OBJECT_TYPE_FSTREE, sealed)
+}
+
+var zeroObjHeader [32]byte
+
+func isNoHeaderBTreeNode(block []byte) bool {
+	return bytes.Equal(block[:len(zeroObjHeader)], zeroObjHeader[:]) &&
+		btreeNodeFlag(binary.LittleEndian.Uint16(block[32:34]))&BTNODE_NOHEADER != 0
+}
+
+func readObj(r io.ReaderAt, blockAddr uint64, treeSubtype objType, sealed bool) (*Obj, error) {
 
 	var err error
 	var o Obj
@@ -139,7 +160,9 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 		return nil, fmt.Errorf("failed to read object block data at block address %#x: %v", blockAddr, err)
 	}
 
-	if !VerifyChecksum(block) {
+	allowNoHeader := sealed && (treeSubtype == OBJECT_TYPE_FSTREE || treeSubtype == OBJECT_TYPE_FEXT_TREE)
+	noHeader := allowNoHeader && isNoHeaderBTreeNode(block)
+	if !noHeader && !VerifyChecksum(block) {
 		return nil, fmt.Errorf("obj_phys_t data block failed checksum validation: %w", ErrBadBlockChecksum)
 	}
 
@@ -147,6 +170,10 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 
 	if err := binary.Read(rr, binary.LittleEndian, &o.Hdr); err != nil {
 		return nil, fmt.Errorf("failed to read obj_phys_t: %v", err)
+	}
+	if noHeader {
+		o.Hdr.Type = OBJECT_TYPE_BTREE_NODE
+		o.Hdr.Subtype = treeSubtype
 	}
 
 	switch o.Hdr.GetType() {
@@ -172,6 +199,8 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 		if err := binary.Read(rr, binary.LittleEndian, &node.BTreeNodePhysT); err != nil {
 			return nil, fmt.Errorf("failed to read btree_node_phys_t struct: %v", err)
 		}
+		node.subtype = o.Hdr.GetSubType()
+		node.sealed = sealed
 		if node.Nkeys > 0 {
 			switch o.Hdr.GetSubType() {
 			case OBJECT_TYPE_OMAP:
@@ -249,13 +278,13 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 			return nil, fmt.Errorf("failed to read omap_phys_t: %v", err)
 		}
 		if omap.TreeOid > 0 {
-			omap.Tree, err = ReadObj(r, uint64(omap.TreeOid))
+			omap.Tree, err = ReadBTreeNode(r, uint64(omap.TreeOid), OBJECT_TYPE_OMAP)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read omap_phys_t tree at block %#x: %v", omap.TreeOid, err)
 			}
 		}
 		if omap.SnapshotTreeOid > 0 {
-			omap.Tree, err = ReadObj(r, uint64(omap.SnapshotTreeOid))
+			omap.Tree, err = ReadBTreeNode(r, uint64(omap.SnapshotTreeOid), OBJECT_TYPE_OMAP)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read omap_phys_t snapshot_tree at block %#x: %v", omap.SnapshotTreeOid, err)
 			}
@@ -286,15 +315,21 @@ func ReadObj(r io.ReaderAt, blockAddr uint64) (*Obj, error) {
 			}
 		}
 		if apsb.ExtentrefTreeOid > 0 {
-			apsb.ExtentRefTree, err = ReadObj(r, uint64(apsb.ExtentrefTreeOid))
+			apsb.ExtentRefTree, err = ReadBTreeNode(r, uint64(apsb.ExtentrefTreeOid), OBJECT_TYPE_BLOCKREFTREE)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read root node of the container object map B-tree at block %#x: %v", apsb.ExtentrefTreeOid, err)
 			}
 		}
 		if apsb.SnapMetaTreeOid > 0 {
-			apsb.SnapMetaTree, err = ReadObj(r, uint64(apsb.SnapMetaTreeOid))
+			apsb.SnapMetaTree, err = ReadBTreeNode(r, uint64(apsb.SnapMetaTreeOid), OBJECT_TYPE_SNAPMETATREE)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read root node of the container object map B-tree at block %#x: %v", apsb.SnapMetaTreeOid, err)
+			}
+		}
+		if apsb.FextTreeOid > 0 {
+			apsb.FextTree, err = readObj(r, uint64(apsb.FextTreeOid), OBJECT_TYPE_FEXT_TREE, apsb.IncompatibleFeatures&APFS_INCOMPAT_SEALED_VOLUME != 0)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read root node of the file-extent tree at block %#x: %v", apsb.FextTreeOid, err)
 			}
 		}
 		o.Body = apsb
