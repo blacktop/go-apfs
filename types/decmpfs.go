@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/blacktop/go-apfs/pkg/disk"
 	lzfse "github.com/blacktop/lzfse-cgo"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 )
 
 //go:generate stringer -type=compMethod -output decmpfs_string.go
+
+const maxForkPrealloc = 1 << 30
 
 type compMethod uint32
 
@@ -141,9 +144,19 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 	var buf bytes.Buffer
 	var blocks []cmpfRsrcBlock
 
+	var forkSize uint64
 	for _, fext := range fexts {
-		rr := io.NewSectionReader(r, int64(fext.Block*BLOCK_SIZE), int64(fext.Length))
-		if _, err := buf.ReadFrom(rr); err != nil {
+		forkSize += fext.Length
+	}
+	buf.Grow(int(min(forkSize, maxForkPrealloc)))
+	for _, fext := range fexts {
+		off, length := int64(fext.Block*BLOCK_SIZE), int64(fext.Length)
+		if rw, ok := r.(disk.RangeWriter); ok {
+			err = rw.WriteRange(&buf, off, length)
+		} else {
+			_, err = buf.ReadFrom(io.NewSectionReader(r, off, length))
+		}
+		if err != nil {
 			return fmt.Errorf("failed to read from reader: %v", err)
 		}
 	}
