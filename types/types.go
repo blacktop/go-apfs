@@ -131,18 +131,13 @@ func CreateChecksum(data []byte) uint64 {
 	return (check2 << 32) | check1
 }
 
+// VerifyChecksum reports whether the Fletcher-64 checksum stored in the first
+// eight bytes of an object block matches the rest of the block.
 func VerifyChecksum(data []byte) bool {
-	var sum1, sum2 uint64
-
-	modValue := uint64(2<<31 - 1)
-
-	for i := range len(data) / 4 {
-		d := binary.LittleEndian.Uint32(data[i*4 : (i+1)*4])
-		sum1 = (sum1 + uint64(d)) % modValue
-		sum2 = (sum2 + sum1) % modValue
+	if len(data) < 8 {
+		return false
 	}
-
-	return (sum2<<32)|sum1 != 0
+	return binary.LittleEndian.Uint64(data) == CreateChecksum(data[8:])
 }
 
 var NameColor = color.New(color.Bold, color.FgHiBlue).SprintFunc()
