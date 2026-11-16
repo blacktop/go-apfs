@@ -165,7 +165,7 @@ func OpenReader(source io.ReaderAt, size int64) (*Reader, error) {
 		if err := readFull(source, candidate, int64(base+i)*readerBlockSize); err != nil {
 			return nil, err
 		}
-		if xid := le.Uint64(candidate[16:]); string(candidate[32:36]) == types.NX_MAGIC && xid > latest && validChecksum(candidate) {
+		if xid := le.Uint64(candidate[16:]); string(candidate[32:36]) == types.NX_MAGIC && xid > latest && types.VerifyChecksum(candidate) {
 			container, latest = candidate, xid
 			candidate = make([]byte, readerBlockSize)
 		}
@@ -232,13 +232,6 @@ func readFull(source io.ReaderAt, p []byte, off int64) error {
 	return err
 }
 
-// validChecksum reports whether a block's object header holds the Fletcher-64
-// checksum of the rest of the block. types.VerifyChecksum is not used because
-// it accepts any block whose words do not sum to zero.
-func validChecksum(block []byte) bool {
-	return le.Uint64(block) == types.CreateChecksum(block[8:])
-}
-
 // block returns the block at address. It must pass its object checksum unless
 // treeNode is set, the volume is sealed, and the block is a header-less B-tree
 // node: one flagged BTNODE_NOHEADER whose whole 32-byte object header is zero.
@@ -253,7 +246,7 @@ func (r *Reader) block(address uint64, hash []byte, treeNode bool) ([]byte, erro
 		if err := readFull(r.source, data, int64(address)*readerBlockSize); err != nil {
 			return nil, err
 		}
-		block = &readerBlock{data: data, checksummed: validChecksum(data)}
+		block = &readerBlock{data: data, checksummed: types.VerifyChecksum(data)}
 	}
 	if !block.checksummed {
 		headerless := [32]byte(block.data[:32]) == [32]byte{} && le.Uint16(block.data[32:])&nodeNoHeader != 0
