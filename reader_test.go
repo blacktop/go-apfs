@@ -140,7 +140,7 @@ func TestReaderCompressedChunks(t *testing.T) {
 		fork := le.AppendUint32(nil, 8)
 		fork = le.AppendUint32(fork, uint32(8+len(tc.encoded)))
 		fork = append(fork, tc.encoded...)
-		file, err := newCompressedFile(&File{bytes.NewReader(fork), int64(len(fork))}, uint64(len(compressedPlain)), tc.forked)
+		file, err := newCompressedFile(&File{ReaderAt: bytes.NewReader(fork), Size: int64(len(fork))}, uint64(len(compressedPlain)), tc.forked)
 		if err != nil {
 			t.Fatal(tc.name, err)
 		}
@@ -150,7 +150,7 @@ func TestReaderCompressedChunks(t *testing.T) {
 		}
 		fork[len(fork)-1] ^= 0xff
 		fork[8+len(tc.encoded)/2] ^= 0xff
-		file, err = newCompressedFile(&File{bytes.NewReader(fork), int64(len(fork))}, uint64(len(compressedPlain)), tc.forked)
+		file, err = newCompressedFile(&File{ReaderAt: bytes.NewReader(fork), Size: int64(len(fork))}, uint64(len(compressedPlain)), tc.forked)
 		if err != nil {
 			t.Fatal(tc.name, err)
 		}
@@ -246,9 +246,10 @@ func rangedFixture() []byte {
 		le.PutUint16(v[16:], kind)
 		return rec{k, v}
 	}
-	inode := func(id, size uint64) rec {
+	inode := func(id, size uint64, mode uint16) rec {
 		v := make([]byte, 92)
 		le.PutUint64(v[8:], id)
+		le.PutUint16(v[80:], mode)
 		le.PutUint64(v[84:], size)
 		return rec{key(id, kindInode, 8), v}
 	}
@@ -270,10 +271,10 @@ func rangedFixture() []byte {
 		dirrec("fixture.loctable", 3, uint16(types.DT_REG)),
 		dirrec("link", 4, uint16(types.DT_LNK)),
 		dirrec("stream.cmp", 5, uint16(types.DT_REG)),
-		inode(3, 7),
-		inode(4, 0),
+		inode(3, 7, 0100755),
+		inode(4, 0, 0120755),
 		xattr(4, types.XATTR_SYMLINK_EA_NAME, xattrEmbedded, []byte("fixture.loctable\x00")),
-		inode(5, 0),
+		inode(5, 0, 0100644),
 		xattr(5, types.XATTR_DECMPFS_EA_NAME, xattrStream, u64s(6, uint64(len(cmpHeader)), 0, 0, 0, 0)),
 	})
 	hash := sha256.Sum256(block(7))
@@ -315,6 +316,9 @@ func TestReaderSealedVolume(t *testing.T) {
 	if _, err := file.ReadAt(data, 0); err != nil || string(data) != "fixture" {
 		t.Fatal(string(data), err)
 	}
+	if file.Mode != 0755 {
+		t.Fatal(file.Mode)
+	}
 	if target, err := fs.Readlink(entries[1].ID); err != nil || target != entries[0].Name {
 		t.Fatal(target, err)
 	}
@@ -328,6 +332,9 @@ func TestReaderSealedVolume(t *testing.T) {
 	data = make([]byte, file.Size)
 	if _, err := file.ReadAt(data, 0); err != nil || string(data) != "hello" {
 		t.Fatal(string(data), err)
+	}
+	if file.Mode != 0644 {
+		t.Fatal(file.Mode)
 	}
 	image[7*readerBlockSize+2000] ^= 1
 	fs, err = OpenReader(bytes.NewReader(image), int64(len(image)))

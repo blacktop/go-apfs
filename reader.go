@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/fs"
 	"slices"
 	"sort"
 	"strings"
@@ -123,10 +124,12 @@ type Entry struct {
 }
 
 // File reads the logical contents of a file, decompressing as needed. Size is
-// its length in bytes; reads that reach it return io.EOF.
+// its length in bytes; reads that reach it return io.EOF. Mode is the inode's
+// type and permission bits, set on files returned by OpenFileID.
 type File struct {
 	io.ReaderAt
 	Size int64
+	Mode fs.FileMode
 }
 
 // OpenReader opens the container held in the first size bytes of source, using
@@ -512,7 +515,7 @@ func (r *Reader) extentFile(extents []readerExtent, size uint64) (*File, error) 
 	if size > position || size > uint64(r.size) {
 		return nil, fmt.Errorf("incomplete APFS extents")
 	}
-	return &File{&extentReader{r.source, extents, int64(size)}, int64(size)}, nil
+	return &File{ReaderAt: &extentReader{r.source, extents, int64(size)}, Size: int64(size)}, nil
 }
 
 // extentReader reads a file through extents that extentFile has sorted and
@@ -665,6 +668,39 @@ func dstreamSize(inode []byte) (uint64, error) {
 	return size, nil
 }
 
+// inodeMode converts the Unix mode_t of an inode of at least 92 bytes.
+func inodeMode(inode []byte) fs.FileMode {
+	raw := le.Uint16(inode[80:])
+	mode := fs.FileMode(raw & 0777)
+	if raw&04000 != 0 {
+		mode |= fs.ModeSetuid
+	}
+	if raw&02000 != 0 {
+		mode |= fs.ModeSetgid
+	}
+	if raw&01000 != 0 {
+		mode |= fs.ModeSticky
+	}
+	switch raw & uint16(types.S_IFMT) {
+	case uint16(types.REG):
+	case uint16(types.DIR):
+		mode |= fs.ModeDir
+	case uint16(types.LNK):
+		mode |= fs.ModeSymlink
+	case uint16(types.FIFO):
+		mode |= fs.ModeNamedPipe
+	case uint16(types.SOCK):
+		mode |= fs.ModeSocket
+	case uint16(types.CHR):
+		mode |= fs.ModeDevice | fs.ModeCharDevice
+	case uint16(types.BLK):
+		mode |= fs.ModeDevice
+	default:
+		mode |= fs.ModeIrregular
+	}
+	return mode
+}
+
 // OpenFileID opens the file with inode number id. It supports plain files and
 // decmpfs-compressed files (zlib, LZVN, LZFSE, LZBITMAP and uncompressed inline;
 // LZVN, LZFSE and LZBITMAP in the resource fork), and rejects sparse files. An
@@ -706,25 +742,35 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 	if len(inode) < 92 {
 		return nil, fmt.Errorf("APFS file has no valid inode")
 	}
+	var file *File
 	if compression != nil {
 		// A stream-stored header carries an inline payload too large to embed.
 		header, err := r.xattrValue(compressionFlags, compression, 16+1+readerMaxDecoded)
 		if err != nil {
 			return nil, err
 		}
-		return r.openCompressed(header, resource)
-	}
-	size, err := dstreamSize(inode)
-	if err != nil {
-		return nil, err
-	}
-	if len(extents) == 0 && size > 0 {
-		extents, err = r.extents(le.Uint64(inode[8:]))
+		file, err = r.openCompressed(header, resource)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		size, err := dstreamSize(inode)
+		if err != nil {
+			return nil, err
+		}
+		if len(extents) == 0 && size > 0 {
+			extents, err = r.extents(le.Uint64(inode[8:]))
+			if err != nil {
+				return nil, err
+			}
+		}
+		file, err = r.extentFile(extents, size)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return r.extentFile(extents, size)
+	file.Mode = inodeMode(inode)
+	return file, nil
 }
 
 // openCompressed opens a decmpfs file whose payload is either inline in the
@@ -741,7 +787,7 @@ func (r *Reader) openCompressed(header, resource []byte) (*File, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &File{bytes.NewReader(data), int64(len(data))}, nil
+		return &File{ReaderAt: bytes.NewReader(data), Size: int64(len(data))}, nil
 	}
 	if len(resource) < 48 {
 		return nil, fmt.Errorf("missing APFS resource stream")
@@ -870,7 +916,7 @@ func newCompressedFile(source *File, size uint64, method uint32) (*File, error) 
 		return nil, fmt.Errorf("invalid resource table")
 	}
 	cache, _ := lru.New[int, []byte](readerChunkCache)
-	return &File{&compressedReader{source, offsets, int64(size), method, cache}, int64(size)}, nil
+	return &File{ReaderAt: &compressedReader{source, offsets, int64(size), method, cache}, Size: int64(size)}, nil
 }
 
 func (r *compressedReader) ReadAt(p []byte, off int64) (int, error) {
