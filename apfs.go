@@ -265,7 +265,7 @@ func (a *APFS) Cat(path string) error {
 		var symlink string
 		var fileName string
 		// var uncompressedSize uint64
-		var totalBytesWritten uint64
+		var fileSize uint64
 		var privateID uint64
 		var fexts []types.FileExtent
 		var rsrcFexts []types.FileExtent
@@ -284,7 +284,7 @@ func (a *APFS) Cat(path string) error {
 					case types.INO_EXT_TYPE_NAME:
 						fileName = xf.Field.(string)
 					case types.INO_EXT_TYPE_DSTREAM:
-						totalBytesWritten = xf.Field.(types.JDstreamT).TotalBytesWritten
+						fileSize = xf.Field.(types.JDstreamT).Size
 					}
 				}
 			case types.APFS_TYPE_FILE_EXTENT:
@@ -317,7 +317,7 @@ func (a *APFS) Cat(path string) error {
 			}
 		}
 
-		if !compressed && len(fexts) == 0 && totalBytesWritten > 0 {
+		if !compressed && len(fexts) == 0 && fileSize > 0 {
 			if fexts, err = a.fextExtents(privateID); err != nil {
 				return fmt.Errorf("failed to get file-extent tree records for private id %#x: %v", privateID, err)
 			}
@@ -330,10 +330,20 @@ func (a *APFS) Cat(path string) error {
 			}
 			w.Flush()
 		} else {
+			w := bufio.NewWriter(os.Stdout)
+			remaining := int64(fileSize)
 			for _, fext := range fexts {
-				if err := a.dev.ReadFile(bufio.NewWriter(os.Stdout), int64(fext.Block*types.BLOCK_SIZE), int64(totalBytesWritten)); err != nil {
+				if remaining <= 0 {
+					break
+				}
+				extentBytes := min(int64(fext.Length), remaining)
+				if err := a.dev.ReadFile(w, int64(fext.Block*types.BLOCK_SIZE), extentBytes); err != nil {
 					return fmt.Errorf("failed to write file data from device: %v", err)
 				}
+				remaining -= extentBytes
+			}
+			if err := w.Flush(); err != nil {
+				return fmt.Errorf("failed to flush file data: %w", err)
 			}
 		}
 	}
@@ -553,9 +563,8 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 
 	var decmpfsHdr *types.DecmpfsDiskHeader
 	var symlink string
-	var fileName string
 	var uncompressedSize uint64
-	var totalBytesWritten uint64
+	var fileSize uint64
 	var privateID uint64
 	var fexts []types.FileExtent
 	var rsrcFexts []types.FileExtent
@@ -574,10 +583,8 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 			}
 			for _, xf := range rec.Val.(types.JInodeVal).Xfields {
 				switch xf.XType {
-				case types.INO_EXT_TYPE_NAME:
-					fileName = xf.Field.(string)
 				case types.INO_EXT_TYPE_DSTREAM:
-					totalBytesWritten = xf.Field.(types.JDstreamT).TotalBytesWritten
+					fileSize = xf.Field.(types.JDstreamT).Size
 				}
 			}
 		case types.APFS_TYPE_FILE_EXTENT:
@@ -615,11 +622,9 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 	if !foundInode {
 		return fmt.Errorf("missing inode for file oid %#x", rec.Val.(types.JDrecVal).FileID)
 	}
-	if fileName == "" {
-		return fmt.Errorf("missing inode name for file oid %#x", rec.Val.(types.JDrecVal).FileID)
-	}
+	fileName := rec.Key.(types.JDrecHashedKeyT).Name
 
-	if !compressed && len(fexts) == 0 && totalBytesWritten > 0 {
+	if !compressed && len(fexts) == 0 && fileSize > 0 {
 		fexts, err = a.fextExtents(privateID)
 		if err != nil {
 			return fmt.Errorf("failed to get file-extent tree records for private id %#x: %v", privateID, err)
@@ -642,7 +647,7 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 	}
 	defer fo.Close()
 
-	expectedSize := totalBytesWritten
+	expectedSize := fileSize
 	if compressed && decmpfsHdr == nil {
 		return fmt.Errorf("missing decmpfs header for compressed file %s", outPath)
 	}
@@ -653,7 +658,7 @@ func (a *APFS) copyFile(root *os.Root, rec types.NodeEntry, dest string) error {
 		}
 		expectedSize = uncompressedSize
 	} else {
-		remaining := int64(totalBytesWritten)
+		remaining := int64(fileSize)
 		for _, fext := range fexts {
 			if remaining <= 0 {
 				break

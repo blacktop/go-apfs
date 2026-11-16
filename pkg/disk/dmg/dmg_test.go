@@ -191,3 +191,13 @@ func TestOpenUnencryptedPreservesInput(t *testing.T) {
 	assertFileBytes(t, path, plain)
 	assertTempOutputs(t, dir)
 }
+
+func TestOpenAcceptsNilConfig(t *testing.T) {
+	d, err := Open("../../../testdata/test.dmg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

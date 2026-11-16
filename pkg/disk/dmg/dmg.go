@@ -607,6 +607,9 @@ func (b *Partition) decompressChunk(chunk udifBlockChunk) ([]byte, error) {
 
 // Open opens the named file using os.Open and prepares it for use as a dmg.
 func Open(name string, c *Config) (*DMG, error) {
+	if c == nil {
+		c = &Config{}
+	}
 	var decrypted string
 	defer func() {
 		if decrypted != "" {
@@ -652,9 +655,7 @@ func Open(name string, c *Config) (*DMG, error) {
 		f.Close()
 		return nil, err
 	}
-	if c != nil {
-		ff.config = *c
-	}
+	ff.config = *c
 	if err := ff.Load(); err != nil {
 		f.Close()
 		return nil, err
