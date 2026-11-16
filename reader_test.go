@@ -31,6 +31,7 @@ func TestReaderNodeBounds(t *testing.T) {
 	}
 	for name, data := range map[string][]byte{
 		"excessive record count":  node(nodeLeaf, 0, 1025),
+		"record count past int32": node(nodeLeaf, 0, 0x80000000),
 		"level 0 without leaf":    node(0, 0, 0),
 		"leaf flag above level 0": node(nodeLeaf, 1, 1),
 		"empty index node":        node(0, 1, 0),
@@ -111,6 +112,7 @@ func TestReaderCompressedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lzfseData := lzfse.EncodeBuffer(compressedPlain)
 	for _, tc := range []struct {
 		name           string
 		inline, forked uint32
@@ -118,12 +120,9 @@ func TestReaderCompressedChunks(t *testing.T) {
 		encoded        []byte
 	}{
 		{"LZVN", cmpAttrLZVN, cmpRsrcLZVN, lzvn[0] == 6, lzvn},
-		{"LZFSE", cmpAttrLZFSE, cmpRsrcLZFSE, false, lzfse.EncodeBuffer(compressedPlain)},
+		{"LZFSE", cmpAttrLZFSE, cmpRsrcLZFSE, lzfseData[0] != 0x62, lzfseData},
 		{"LZBITMAP", cmpAttrLZBitmap, cmpRsrcLZBitmap, lzbitmap[0] == 0xff, lzbitmap},
 	} {
-		if tc.name == "LZFSE" {
-			tc.stored = tc.encoded[0] != 0x62
-		}
 		if tc.stored || len(tc.encoded) == 0 || len(tc.encoded) >= len(compressedPlain) {
 			t.Fatalf("%s fixture is not a compressed chunk", tc.name)
 		}
@@ -135,10 +134,7 @@ func TestReaderCompressedChunks(t *testing.T) {
 			t.Fatalf("%s accepted a short decode", tc.name)
 		}
 
-		// A resource fork is an offset table followed by the chunks.
-		fork := le.AppendUint32(nil, 8)
-		fork = le.AppendUint32(fork, uint32(8+len(tc.encoded)))
-		fork = append(fork, tc.encoded...)
+		fork := testFork(tc.encoded)
 		file, err := newCompressedFile(&File{ReaderAt: bytes.NewReader(fork), Size: int64(len(fork))}, uint64(len(compressedPlain)), tc.forked)
 		if err != nil {
 			t.Fatal(tc.name, err)
@@ -161,6 +157,59 @@ func TestReaderCompressedChunks(t *testing.T) {
 
 func sealTestBlock(b []byte) { le.PutUint64(b, types.CreateChecksum(b[8:])) }
 
+func testBlock(image []byte, index int) []byte {
+	return image[index*readerBlockSize : (index+1)*readerBlockSize]
+}
+
+// stripTestHeader turns a block into a header-less node.
+func stripTestHeader(b []byte) {
+	clear(b[:32])
+	le.PutUint16(b[32:], le.Uint16(b[32:])|nodeNoHeader)
+}
+
+func openTestReader(t testing.TB, image []byte) *Reader {
+	t.Helper()
+	r, err := OpenReader(bytes.NewReader(image), int64(len(image)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// readTestFile opens the file with inode number id and returns it with its
+// whole contents.
+func readTestFile(t testing.TB, r *Reader, id uint64) (*File, string) {
+	t.Helper()
+	file, err := r.OpenFileID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, file.Size)
+	if err := readFull(file, data, 0); err != nil {
+		t.Fatal(err)
+	}
+	return file, string(data)
+}
+
+// testFork lays chunks out as a decmpfs resource fork: an offset table
+// followed by the chunks.
+func testFork(chunks ...[]byte) []byte {
+	pos := uint32((len(chunks) + 1) * 4)
+	fork := le.AppendUint32(nil, pos)
+	for _, c := range chunks {
+		pos += uint32(len(c))
+		fork = le.AppendUint32(fork, pos)
+	}
+	for _, c := range chunks {
+		fork = append(fork, c...)
+	}
+	return fork
+}
+
+func errContains(err error, want string) bool {
+	return err != nil && strings.Contains(err.Error(), want)
+}
+
 func rangedFixture() []byte { return rangedFixtureNamed("fixture.loctable") }
 
 // rangedFixtureNamed builds the fixture with its first directory entry named
@@ -174,7 +223,7 @@ func rangedFixtureNamed(first string) []byte {
 	)
 	image := make([]byte, (payloadBlock+2)*readerBlockSize)
 	seal := sealTestBlock
-	block := func(index int) []byte { return image[index*readerBlockSize : (index+1)*readerBlockSize] }
+	block := func(index int) []byte { return testBlock(image, index) }
 	b := block(0)
 	copy(b[32:], types.NX_MAGIC)
 	le.PutUint32(b[36:], readerBlockSize)
@@ -275,12 +324,12 @@ func rangedFixtureNamed(first string) []byte {
 		dirrec(first, 3, uint16(types.DT_REG)),
 		dirrec("link", 4, uint16(types.DT_LNK)),
 		dirrec("stream.cmp", 5, uint16(types.DT_REG)),
-		inode(3, 7, 0100755),
+		inode(3, 7, uint16(types.REG)|0755),
 		// An embedded resource fork that the plain file never needs.
 		xattr(3, types.XATTR_RESOURCEFORK_EA_NAME, xattrEmbedded, []byte("fork")),
-		inode(4, 0, 0120755),
+		inode(4, 0, uint16(types.LNK)|0755),
 		xattr(4, types.XATTR_SYMLINK_EA_NAME, xattrEmbedded, []byte("fixture.loctable\x00")),
-		inode(5, 0, 0100644),
+		inode(5, 0, uint16(types.REG)|0644),
 		xattr(5, types.XATTR_DECMPFS_EA_NAME, xattrStream, u64s(6, uint64(len(cmpHeader)), 0, 0, 0, 0)),
 	})
 	hash := sha256.Sum256(block(7))
@@ -297,10 +346,7 @@ func rangedFixtureNamed(first string) []byte {
 
 func TestReaderSealedVolume(t *testing.T) {
 	image := rangedFixture()
-	fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fs := openTestReader(t, image)
 	entries, err := fs.ReadDirID(types.ROOT_DIR_INO_NUM)
 	if err != nil || len(entries) != 3 {
 		t.Fatal(entries, err)
@@ -314,16 +360,8 @@ func TestReaderSealedVolume(t *testing.T) {
 	if root, err := fs.Lookup("/"); err != nil || root.ID != types.ROOT_DIR_INO_NUM {
 		t.Fatal(root, err)
 	}
-	file, err := fs.OpenFileID(entries[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data := make([]byte, file.Size)
-	if _, err := file.ReadAt(data, 0); err != nil || string(data) != "fixture" {
-		t.Fatal(string(data), err)
-	}
-	if file.Mode != 0755 {
-		t.Fatal(file.Mode)
+	if file, data := readTestFile(t, fs, entries[0].ID); data != "fixture" || file.Mode != 0755 {
+		t.Fatal(data, file.Mode)
 	}
 	if target, err := fs.Readlink(entries[1].ID); err != nil || target != entries[0].Name {
 		t.Fatal(target, err)
@@ -331,22 +369,11 @@ func TestReaderSealedVolume(t *testing.T) {
 	if _, err := fs.Readlink(entries[0].ID); err == nil {
 		t.Fatal("read a link target from a regular file")
 	}
-	file, err = fs.OpenFileID(entries[2].ID)
-	if err != nil {
-		t.Fatal(err)
+	if file, data := readTestFile(t, fs, entries[2].ID); data != "hello" || file.Mode != 0644 {
+		t.Fatal(data, file.Mode)
 	}
-	data = make([]byte, file.Size)
-	if _, err := file.ReadAt(data, 0); err != nil || string(data) != "hello" {
-		t.Fatal(string(data), err)
-	}
-	if file.Mode != 0644 {
-		t.Fatal(file.Mode)
-	}
-	image[7*readerBlockSize+2000] ^= 1
-	fs, err = OpenReader(bytes.NewReader(image), int64(len(image)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testBlock(image, 7)[2000] ^= 1
+	fs = openTestReader(t, image)
 	if _, err := fs.ReadDirID(types.ROOT_DIR_INO_NUM); err == nil {
 		t.Fatal("accepted a sealed child with an invalid hash")
 	}
@@ -356,22 +383,17 @@ func TestReaderSealedVolume(t *testing.T) {
 // only as a wholly header-less file-system or extent tree node of a volume
 // that declares itself sealed.
 func TestReaderHeaderlessNodes(t *testing.T) {
-	block := func(image []byte, index int) []byte {
-		return image[index*readerBlockSize : (index+1)*readerBlockSize]
-	}
 	for name, corrupt := range map[string]func(image []byte){
 		"a volume that is not sealed": func(image []byte) {
-			volume := block(image, 3)
+			volume := testBlock(image, 3)
 			le.PutUint64(volume[56:], 0)
 			sealTestBlock(volume)
 		},
 		"a header-less object-map node": func(image []byte) {
-			omap := block(image, 5)
-			clear(omap[:32])
-			le.PutUint16(omap[32:], le.Uint16(omap[32:])|nodeNoHeader)
+			stripTestHeader(testBlock(image, 5))
 		},
 		"a partly zero object header": func(image []byte) {
-			block(image, 7)[24] = 1
+			testBlock(image, 7)[24] = 1
 		},
 	} {
 		image := rangedFixture()
@@ -380,7 +402,7 @@ func TestReaderHeaderlessNodes(t *testing.T) {
 		if err == nil {
 			_, err = fs.ReadDirID(types.ROOT_DIR_INO_NUM)
 		}
-		if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		if !errContains(err, "checksum mismatch") {
 			t.Fatalf("header-less node in %s: error = %v, want checksum mismatch", name, err)
 		}
 	}
@@ -389,68 +411,51 @@ func TestReaderHeaderlessNodes(t *testing.T) {
 // TestReaderBlockGate covers the cells of the block cache's checksum gate that
 // the volume-level tests do not reach.
 func TestReaderBlockGate(t *testing.T) {
-	open := func(image []byte) *Reader {
-		t.Helper()
-		fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return fs
-	}
-	mismatch := func(err error, want string) bool { return err != nil && strings.Contains(err.Error(), want) }
-
 	// A header-less node cached for a tree read is still refused to a caller
 	// that requires a checksum.
-	fs := open(rangedFixture())
-	if _, err := fs.block(7, nil, true); err != nil {
+	fs := openTestReader(t, rangedFixture())
+	if _, err := fs.treeBlock(7, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fs.block(7, nil, false); !mismatch(err, "checksum mismatch") {
+	if _, err := fs.block(7); !errContains(err, "checksum mismatch") {
 		t.Fatalf("cached header-less node served to a checksummed caller: %v", err)
 	}
 
 	// A checksummed node is still held to its parent's hash, also from the cache.
 	image := rangedFixture()
-	fs = open(image)
-	sum := sha256.Sum256(image[6*readerBlockSize : 7*readerBlockSize])
-	if _, err := fs.block(6, sum[:], true); err != nil {
+	fs = openTestReader(t, image)
+	sum := sha256.Sum256(testBlock(image, 6))
+	if _, err := fs.treeBlock(6, sum[:]); err != nil {
 		t.Fatal(err)
 	}
 	sum[0] ^= 1
-	if _, err := fs.block(6, sum[:], true); !mismatch(err, "hash mismatch") {
+	if _, err := fs.treeBlock(6, sum[:]); !errContains(err, "hash mismatch") {
 		t.Fatalf("error = %v, want child hash mismatch", err)
 	}
 
 	// A header-less extent-tree node has no parent hash and is accepted on a
 	// sealed volume, fresh and from the cache.
 	image = rangedFixture()
-	node := image[8*readerBlockSize : 9*readerBlockSize]
-	clear(node[:32])
-	le.PutUint16(node[32:], le.Uint16(node[32:])|nodeNoHeader)
-	fs = open(image)
+	stripTestHeader(testBlock(image, 8))
+	fs = openTestReader(t, image)
 	for pass := range 2 {
-		file, err := fs.OpenFileID(3)
-		if err != nil {
-			t.Fatalf("pass %d: %v", pass, err)
-		}
-		data := make([]byte, file.Size)
-		if _, err := file.ReadAt(data, 0); err != nil || string(data) != "fixture" {
-			t.Fatalf("pass %d: %q, %v", pass, data, err)
+		if _, data := readTestFile(t, fs, 3); data != "fixture" {
+			t.Fatalf("pass %d: %q", pass, data)
 		}
 	}
 
 	// A corrupt checksummed block is rejected, and stays rejected on retry.
 	image = rangedFixture()
-	image[8*readerBlockSize+2000] ^= 1
-	fs = open(image)
+	testBlock(image, 8)[2000] ^= 1
+	fs = openTestReader(t, image)
 	for pass := range 2 {
-		if _, err := fs.OpenFileID(3); !mismatch(err, "checksum mismatch") {
+		if _, err := fs.OpenFileID(3); !errContains(err, "checksum mismatch") {
 			t.Fatalf("pass %d: error = %v, want checksum mismatch", pass, err)
 		}
 	}
 	image = rangedFixture()
-	image[3*readerBlockSize+2000] ^= 1 // volume superblock
-	if _, err := OpenReader(bytes.NewReader(image), int64(len(image))); !mismatch(err, "checksum mismatch") {
+	testBlock(image, 3)[2000] ^= 1 // volume superblock
+	if _, err := OpenReader(bytes.NewReader(image), int64(len(image))); !errContains(err, "checksum mismatch") {
 		t.Fatalf("error = %v, want checksum mismatch", err)
 	}
 }
@@ -471,10 +476,7 @@ func TestReaderLatestCheckpoint(t *testing.T) {
 	le.PutUint64(b[112:], uint64(n))
 	le.PutUint64(b[160:], 0) // block 0 alone cannot open
 	sealTestBlock(b)
-	fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fs := openTestReader(t, image)
 	if entries, err := fs.ReadDirID(types.ROOT_DIR_INO_NUM); err != nil || len(entries) != 3 {
 		t.Fatal(entries, err)
 	}
@@ -514,17 +516,15 @@ func TestReaderRejectsUnsupportedContainers(t *testing.T) {
 // A size that is only an upper bound must not widen the container: metadata
 // and extents aimed past its block count fail the bounds checks.
 func TestReaderContainerBlockCount(t *testing.T) {
-	padded := func() []byte { return append(rangedFixture(), make([]byte, 4*readerBlockSize)...) }
+	const padding = 4
+	padded := func() []byte { return append(rangedFixture(), make([]byte, padding*readerBlockSize)...) }
 	image := padded()
-	blocks := uint64(len(rangedFixture()) / readerBlockSize)
-	fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	blocks := uint64(len(image)/readerBlockSize - padding)
+	fs := openTestReader(t, image)
 	if file, err := fs.OpenFileID(3); err != nil || file.Size != 7 {
 		t.Fatal(file, err)
 	}
-	if _, err := fs.block(blocks, nil, false); err == nil || !strings.Contains(err.Error(), "outside image") {
+	if _, err := fs.block(blocks); !errContains(err, "outside image") {
 		t.Fatalf("read a block past the container: %v", err)
 	}
 	if _, err := fs.extentFile([]readerExtent{{logical: 0, physical: blocks - 1, length: 2 * readerBlockSize}}, 1); err == nil {
@@ -532,22 +532,18 @@ func TestReaderContainerBlockCount(t *testing.T) {
 	}
 
 	image = padded()
-	volume := image[3*readerBlockSize : 4*readerBlockSize]
+	volume := testBlock(image, 3)
 	le.PutUint64(volume[128:], blocks) // object map in the padding
 	sealTestBlock(volume)
-	if _, err := OpenReader(bytes.NewReader(image), int64(len(image))); err == nil || !strings.Contains(err.Error(), "outside image") {
+	if _, err := OpenReader(bytes.NewReader(image), int64(len(image))); !errContains(err, "outside image") {
 		t.Fatalf("followed a pointer past the container: %v", err)
 	}
 }
 
 func TestReaderNames(t *testing.T) {
 	for _, name := range []string{"..", ".", "a/b", ""} {
-		image := rangedFixtureNamed(name)
-		fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := fs.ReadDirID(types.ROOT_DIR_INO_NUM); err == nil || !strings.Contains(err.Error(), "unsafe APFS name") {
+		fs := openTestReader(t, rangedFixtureNamed(name))
+		if _, err := fs.ReadDirID(types.ROOT_DIR_INO_NUM); !errContains(err, "unsafe APFS name") {
 			t.Fatalf("name %q: error = %v, want unsafe name", name, err)
 		}
 		if _, err := fs.Lookup("/link"); err == nil {
@@ -555,30 +551,22 @@ func TestReaderNames(t *testing.T) {
 		}
 	}
 	// A backslash is an ordinary character in an APFS name.
-	image := rangedFixtureNamed(`a\b`)
-	fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fs := openTestReader(t, rangedFixtureNamed(`a\b`))
 	if entry, err := fs.Lookup(`/a\b`); err != nil || entry.ID != 3 {
 		t.Fatal(entry, err)
 	}
 }
 
 func TestReaderOpenFileErrors(t *testing.T) {
-	image := rangedFixture()
-	fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fs := openTestReader(t, rangedFixture())
 	if _, err := fs.OpenFileID(999); err == nil {
 		t.Fatal("opened an inode number with no inode record")
 	}
 	fork := &File{ReaderAt: bytes.NewReader(nil)}
-	if _, err := newCompressedFile(fork, 0, cmpRsrcLZVN); err == nil || strings.Contains(err.Error(), "unsupported resource compression") {
+	if _, err := newCompressedFile(fork, 0, cmpRsrcLZVN); err == nil || errContains(err, "unsupported resource compression") {
 		t.Fatalf("error = %v, want a size error", err)
 	}
-	if _, err := newCompressedFile(fork, 1, uint32(types.CMP_RSRC_ZLIB)); err == nil || !strings.Contains(err.Error(), "unsupported resource compression") {
+	if _, err := newCompressedFile(fork, 1, uint32(types.CMP_RSRC_ZLIB)); !errContains(err, "unsupported resource compression") {
 		t.Fatalf("error = %v, want an unsupported-method error", err)
 	}
 }
@@ -604,15 +592,6 @@ func TestReaderDstreamSize(t *testing.T) {
 	}
 	if _, err := dstreamSize(inode[:94]); err == nil {
 		t.Fatal("accepted a truncated field table")
-	}
-}
-
-func TestReaderNodeCountOverflow(t *testing.T) {
-	data := make([]byte, readerBlockSize)
-	le.PutUint16(data[32:], nodeLeaf)
-	le.PutUint32(data[36:], 0x80000000) // negative as a 32-bit int
-	if _, err := parseReaderNode(data); err == nil {
-		t.Fatal("accepted a node with an out-of-range record count")
 	}
 }
 
@@ -656,15 +635,7 @@ func TestReaderMultiChunkFork(t *testing.T) {
 		}
 		chunks = append(chunks, lzfse.EncodeBuffer(plain[off:end]))
 	}
-	pos := uint32((len(chunks) + 1) * 4)
-	fork := le.AppendUint32(nil, pos)
-	for _, c := range chunks {
-		pos += uint32(len(c))
-		fork = le.AppendUint32(fork, pos)
-	}
-	for _, c := range chunks {
-		fork = append(fork, c...)
-	}
+	fork := testFork(chunks...)
 	file, err := newCompressedFile(&File{ReaderAt: bytes.NewReader(fork), Size: int64(len(fork))}, uint64(len(plain)), cmpRsrcLZFSE)
 	if err != nil {
 		t.Fatal(err)
@@ -701,24 +672,17 @@ func TestReaderSourceEOFWithData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := fs.OpenFileID(5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data := make([]byte, file.Size)
-	if _, err := file.ReadAt(data, 0); err != nil || string(data) != "hello" {
-		t.Fatal(string(data), err)
+	if _, data := readTestFile(t, fs, 5); data != "hello" {
+		t.Fatal(data)
 	}
 
 	// A resource fork whose last chunk ends exactly at the end of its source.
-	encoded := lzfse.EncodeBuffer(compressedPlain)
-	fork := le.AppendUint32(nil, 8)
-	fork = append(le.AppendUint32(fork, uint32(8+len(encoded))), encoded...)
-	file, err = newCompressedFile(&File{ReaderAt: eofReaderAt{fork}, Size: int64(len(fork))}, uint64(len(compressedPlain)), cmpRsrcLZFSE)
+	fork := testFork(lzfse.EncodeBuffer(compressedPlain))
+	file, err := newCompressedFile(&File{ReaderAt: eofReaderAt{fork}, Size: int64(len(fork))}, uint64(len(compressedPlain)), cmpRsrcLZFSE)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data = make([]byte, len(compressedPlain))
+	data := make([]byte, len(compressedPlain))
 	if _, err := file.ReadAt(data, 0); err != nil || !bytes.Equal(data, compressedPlain) {
 		t.Fatal(err)
 	}
@@ -742,13 +706,14 @@ func FuzzParseReaderNode(f *testing.F) {
 	}
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, data []byte) {
-		if _, err := parseReaderNode(data); err == nil && len(data) != readerBlockSize {
-			t.Fatalf("parsed a node of %d bytes", len(data))
+		// Fit other sizes to one block so that every mutation reaches the parser.
+		if len(data) != readerBlockSize {
+			if _, err := parseReaderNode(data); err == nil {
+				t.Fatalf("parsed a node of %d bytes", len(data))
+			}
+			data = append(make([]byte, 0, readerBlockSize), data[:min(len(data), readerBlockSize)]...)[:readerBlockSize]
 		}
-		// Fit the input to one block so that every mutation reaches the parser.
-		block := make([]byte, readerBlockSize)
-		copy(block, data)
-		node, err := parseReaderNode(block)
+		node, err := parseReaderNode(data)
 		if err != nil {
 			return
 		}
@@ -771,6 +736,7 @@ func FuzzOpenReader(f *testing.F) {
 	f.Add(rangedFixture())
 	f.Add(rangedFixtureNamed(`a\b`))
 	f.Add(make([]byte, readerBlockSize))
+	buf := make([]byte, 1<<16) // read scratch; its contents are never checked
 	f.Fuzz(func(t *testing.T, image []byte) {
 		resealFuzzImage(image)
 		fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
@@ -781,7 +747,6 @@ func FuzzOpenReader(f *testing.F) {
 		if err != nil {
 			return
 		}
-		buf := make([]byte, 1<<16)
 		for _, entry := range entries[:min(len(entries), 8)] {
 			if found, err := fs.Lookup("/" + entry.Name); err == nil && found.Name != entry.Name {
 				t.Fatalf("Lookup(%q) returned %q", entry.Name, found.Name)

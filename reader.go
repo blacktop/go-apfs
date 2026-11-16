@@ -146,7 +146,7 @@ func OpenReader(source io.ReaderAt, size int64) (*Reader, error) {
 	}
 	cache, _ := lru.New[uint64, *readerBlock](readerBlockCache)
 	r := &Reader{source: source, size: size, cache: cache}
-	container, err := r.block(0, nil, false)
+	container, err := r.block(0)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func OpenReader(source io.ReaderAt, size int64) (*Reader, error) {
 	if volumeOID == 0 || volumes != 1 {
 		return nil, fmt.Errorf("expected a single APFS volume, found %d", volumes)
 	}
-	cmap, err := r.block(le.Uint64(container[160:]), nil, false)
+	cmap, err := r.block(le.Uint64(container[160:]))
 	if err != nil {
 		return nil, err
 	}
@@ -195,14 +195,14 @@ func OpenReader(source io.ReaderAt, size int64) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	volume, err := r.block(address, nil, false)
+	volume, err := r.block(address)
 	if err != nil {
 		return nil, err
 	}
 	if string(volume[32:36]) != types.APFS_MAGIC {
 		return nil, fmt.Errorf("invalid APFS volume")
 	}
-	omap, err := r.block(le.Uint64(volume[128:]), nil, false)
+	omap, err := r.block(le.Uint64(volume[128:]))
 	if err != nil {
 		return nil, err
 	}
@@ -232,30 +232,22 @@ func readFull(source io.ReaderAt, p []byte, off int64) error {
 	return err
 }
 
-// block returns the block at address. It must pass its object checksum unless
-// treeNode is set, the volume is sealed, and the block is a header-less B-tree
-// node: one flagged BTNODE_NOHEADER whose whole 32-byte object header is zero.
-// A non-empty hash must also match the block's SHA-256.
-func (r *Reader) block(address uint64, hash []byte, treeNode bool) ([]byte, error) {
-	if address >= uint64(r.size/readerBlockSize) {
-		return nil, fmt.Errorf("APFS block outside image")
+// block returns the block at address, which must pass its object checksum.
+func (r *Reader) block(address uint64) ([]byte, error) {
+	block, err := r.load(address, false)
+	if err != nil {
+		return nil, err
 	}
-	block, cached := r.cache.Get(address)
-	if !cached {
-		data := make([]byte, readerBlockSize)
-		if err := readFull(r.source, data, int64(address)*readerBlockSize); err != nil {
-			return nil, err
-		}
-		block = &readerBlock{data: data, checksummed: types.VerifyChecksum(data)}
-	}
-	if !block.checksummed {
-		headerless := [32]byte(block.data[:32]) == [32]byte{} && le.Uint16(block.data[32:])&nodeNoHeader != 0
-		if !treeNode || !r.sealed || !headerless {
-			return nil, fmt.Errorf("APFS block checksum mismatch at %#x", address)
-		}
-	}
-	if !cached {
-		r.cache.Add(address, block)
+	return block.data, nil
+}
+
+// treeBlock returns a file-system or file-extent tree node. On a sealed volume
+// the node may be header-less instead of checksummed, and a non-empty hash
+// must match its SHA-256.
+func (r *Reader) treeBlock(address uint64, hash []byte) ([]byte, error) {
+	block, err := r.load(address, r.sealed)
+	if err != nil {
+		return nil, err
 	}
 	if len(hash) > 0 {
 		if !block.summed {
@@ -268,6 +260,32 @@ func (r *Reader) block(address uint64, hash []byte, treeNode bool) ([]byte, erro
 	return block.data, nil
 }
 
+// load returns the block at address from the cache or the source. It must pass
+// its object checksum unless headerless is set and it is a header-less B-tree
+// node: one flagged BTNODE_NOHEADER whose whole 32-byte object header is zero.
+func (r *Reader) load(address uint64, headerless bool) (*readerBlock, error) {
+	if address >= uint64(r.size/readerBlockSize) {
+		return nil, fmt.Errorf("APFS block outside image")
+	}
+	block, cached := r.cache.Get(address)
+	if !cached {
+		data := make([]byte, readerBlockSize)
+		if err := readFull(r.source, data, int64(address)*readerBlockSize); err != nil {
+			return nil, err
+		}
+		block = &readerBlock{data: data, checksummed: types.VerifyChecksum(data)}
+	}
+	if !block.checksummed {
+		if !headerless || [32]byte(block.data[:32]) != [32]byte{} || le.Uint16(block.data[32:])&nodeNoHeader == 0 {
+			return nil, fmt.Errorf("APFS block checksum mismatch at %#x", address)
+		}
+	}
+	if !cached {
+		r.cache.Add(address, block)
+	}
+	return block, nil
+}
+
 func parseReaderNode(data []byte) (readerNode, error) {
 	var node readerNode
 	if len(data) != readerBlockSize {
@@ -275,10 +293,11 @@ func parseReaderNode(data []byte) (readerNode, error) {
 	}
 	node.flags = le.Uint16(data[32:])
 	node.level = le.Uint16(data[34:])
-	if le.Uint32(data[36:]) > readerMaxNodeRecords {
+	records := le.Uint32(data[36:])
+	if records > readerMaxNodeRecords {
 		return node, fmt.Errorf("invalid APFS node table")
 	}
-	count := int(le.Uint32(data[36:]))
+	count := int(records)
 	tableOffset := int(le.Uint16(data[40:]))
 	tableSize := int(le.Uint16(data[42:]))
 	fixed := node.flags&nodeFixedKV != 0
@@ -325,17 +344,13 @@ func parseReaderNode(data []byte) (readerNode, error) {
 	return node, nil
 }
 
-func (r *Reader) node(address uint64, hash []byte, treeNode bool) (readerNode, error) {
-	data, err := r.block(address, hash, treeNode)
-	if err != nil {
-		return readerNode{}, err
-	}
-	return parseReaderNode(data)
-}
-
 func (r *Reader) mapping(root, object, transaction uint64) (uint64, error) {
 	for range readerMaxDepth {
-		node, err := r.node(root, nil, false)
+		data, err := r.block(root)
+		if err != nil {
+			return 0, err
+		}
+		node, err := parseReaderNode(data)
 		if err != nil {
 			return 0, err
 		}
@@ -382,7 +397,11 @@ func (r *Reader) collect(result []record, address, object uint64, physical bool,
 		return nil, fmt.Errorf("APFS tree cycle or traversal limit")
 	}
 	visited[address] = true
-	node, err := r.node(address, hash, true)
+	data, err := r.treeBlock(address, hash)
+	if err != nil {
+		return nil, err
+	}
+	node, err := parseReaderNode(data)
 	if err != nil {
 		return nil, err
 	}
@@ -588,44 +607,50 @@ func (r *extentReader) ReadAt(p []byte, off int64) (int, error) {
 	return int(n), nil
 }
 
-// parseXattr decodes an extended-attribute record into its name, flags, and
-// embedded payload.
-func parseXattr(rec record) (name string, flags uint16, data []byte, err error) {
+// xattr is the payload of an extended-attribute record. Its flags say whether
+// data is the value itself or a reference to a data stream that holds it.
+type xattr struct {
+	flags uint16
+	data  []byte
+}
+
+// parseXattr decodes an extended-attribute record into its name and payload.
+func parseXattr(rec record) (string, *xattr, error) {
 	if len(rec.key) < 10 || len(rec.value) < 4 {
-		return "", 0, nil, io.ErrUnexpectedEOF
+		return "", nil, io.ErrUnexpectedEOF
 	}
 	length := int(le.Uint16(rec.key[8:]))
 	size := int(le.Uint16(rec.value[2:]))
 	if length > len(rec.key)-10 || size > len(rec.value)-4 {
-		return "", 0, nil, io.ErrUnexpectedEOF
+		return "", nil, io.ErrUnexpectedEOF
 	}
-	name = strings.TrimSuffix(string(rec.key[10:10+length]), "\x00")
-	return name, le.Uint16(rec.value), rec.value[4 : 4+size], nil
+	name := strings.TrimSuffix(string(rec.key[10:10+length]), "\x00")
+	return name, &xattr{le.Uint16(rec.value), rec.value[4 : 4+size]}, nil
 }
 
-// xattrStream opens the data stream that a stream-stored extended attribute's
-// payload refers to.
-func (r *Reader) xattrStream(data []byte) (*File, error) {
-	if len(data) < 48 {
+// streamFile opens the data stream that a stream-stored extended attribute
+// refers to.
+func (r *Reader) streamFile(x *xattr) (*File, error) {
+	if len(x.data) < 48 {
 		return nil, io.ErrUnexpectedEOF
 	}
-	extents, err := r.extents(le.Uint64(data))
+	extents, err := r.extents(le.Uint64(x.data))
 	if err != nil {
 		return nil, err
 	}
-	return r.extentFile(extents, le.Uint64(data[8:]))
+	return r.extentFile(extents, le.Uint64(x.data[8:]))
 }
 
 // xattrValue returns an extended attribute's value of at most limit bytes,
 // reading it from its data stream when it is not embedded in the record.
-func (r *Reader) xattrValue(flags uint16, data []byte, limit int64) ([]byte, error) {
-	if flags&xattrEmbedded != 0 {
-		return data, nil
+func (r *Reader) xattrValue(x *xattr, limit int64) ([]byte, error) {
+	if x.flags&xattrEmbedded != 0 {
+		return x.data, nil
 	}
-	if flags&xattrStream == 0 {
+	if x.flags&xattrStream == 0 {
 		return nil, fmt.Errorf("APFS extended attribute has no data")
 	}
-	stream, err := r.xattrStream(data)
+	stream, err := r.streamFile(x)
 	if err != nil {
 		return nil, err
 	}
@@ -649,14 +674,14 @@ func (r *Reader) Readlink(id uint64) (string, error) {
 		if rec.kind() != kindXattr {
 			continue
 		}
-		name, flags, data, err := parseXattr(rec)
+		name, link, err := parseXattr(rec)
 		if err != nil {
 			return "", err
 		}
 		if name != types.XATTR_SYMLINK_EA_NAME {
 			continue
 		}
-		target, err := r.xattrValue(flags, data, readerMaxLink)
+		target, err := r.xattrValue(link, readerMaxLink)
 		if err != nil {
 			return "", err
 		}
@@ -738,23 +763,23 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	var inode, compression, resource []byte
-	var compressionFlags, resourceFlags uint16
+	var inode []byte
+	var compression, resource *xattr
 	var extents []readerExtent
 	for _, rec := range records {
 		switch rec.kind() {
 		case kindInode:
 			inode = rec.value
 		case kindXattr:
-			name, flags, data, err := parseXattr(rec)
+			name, value, err := parseXattr(rec)
 			if err != nil {
 				return nil, err
 			}
 			switch name {
 			case types.XATTR_DECMPFS_EA_NAME:
-				compression, compressionFlags = data, flags
+				compression = value
 			case types.XATTR_RESOURCEFORK_EA_NAME:
-				resource, resourceFlags = data, flags
+				resource = value
 			}
 		case kindFileExtent:
 			extent, err := parseExtent(rec)
@@ -770,11 +795,11 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 	var file *File
 	if compression != nil {
 		// A stream-stored header carries an inline payload too large to embed.
-		header, err := r.xattrValue(compressionFlags, compression, 16+1+readerMaxDecoded)
+		header, err := r.xattrValue(compression, 16+1+readerMaxDecoded)
 		if err != nil {
 			return nil, err
 		}
-		file, err = r.openCompressed(header, resource, resourceFlags)
+		file, err = r.openCompressed(header, resource)
 		if err != nil {
 			return nil, err
 		}
@@ -787,7 +812,7 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 		// under the inode number are that stream's only when the two are equal.
 		if private := le.Uint64(inode[8:]); size == 0 {
 			extents = nil
-		} else if private != id || len(extents) == 0 {
+		} else if private != id || (len(extents) == 0 && r.extentRoot != 0) {
 			extents, err = r.extents(private)
 			if err != nil {
 				return nil, err
@@ -804,7 +829,7 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 
 // openCompressed opens a decmpfs file whose payload is either inline in the
 // header attribute or chunked in the resource fork.
-func (r *Reader) openCompressed(header, resource []byte, resourceFlags uint16) (*File, error) {
+func (r *Reader) openCompressed(header []byte, resource *xattr) (*File, error) {
 	if len(header) < 16 || le.Uint32(header) != decmpfsMagic {
 		return nil, fmt.Errorf("invalid decmpfs header")
 	}
@@ -818,13 +843,13 @@ func (r *Reader) openCompressed(header, resource []byte, resourceFlags uint16) (
 		}
 		return &File{ReaderAt: bytes.NewReader(data), Size: int64(len(data))}, nil
 	}
-	if resource != nil && resourceFlags&xattrStream == 0 {
+	if resource != nil && resource.flags&xattrStream == 0 {
 		return nil, fmt.Errorf("embedded resource fork unsupported")
 	}
-	if len(resource) < 48 {
+	if resource == nil || len(resource.data) < 48 {
 		return nil, fmt.Errorf("missing APFS resource stream")
 	}
-	fork, err := r.xattrStream(resource)
+	fork, err := r.streamFile(resource)
 	if err != nil {
 		return nil, err
 	}
