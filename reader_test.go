@@ -723,3 +723,103 @@ func TestReaderSourceEOFWithData(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// resealFuzzImage restores the object checksum of every block that has an
+// object header, so that mutated metadata reaches the parsers instead of
+// stopping at the checksum.
+func resealFuzzImage(image []byte) {
+	for off := 0; off+readerBlockSize <= len(image); off += readerBlockSize {
+		if block := image[off : off+readerBlockSize]; [32]byte(block[:32]) != [32]byte{} {
+			sealTestBlock(block)
+		}
+	}
+}
+
+func FuzzParseReaderNode(f *testing.F) {
+	image := rangedFixture()
+	for off := 0; off < len(image); off += readerBlockSize {
+		f.Add(image[off : off+readerBlockSize])
+	}
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if _, err := parseReaderNode(data); err == nil && len(data) != readerBlockSize {
+			t.Fatalf("parsed a node of %d bytes", len(data))
+		}
+		// Fit the input to one block so that every mutation reaches the parser.
+		block := make([]byte, readerBlockSize)
+		copy(block, data)
+		node, err := parseReaderNode(block)
+		if err != nil {
+			return
+		}
+		if len(node.records) > readerMaxNodeRecords {
+			t.Fatalf("%d records in one node", len(node.records))
+		}
+		for _, rec := range node.records {
+			if len(rec.key) < 8 {
+				t.Fatalf("record key of %d bytes", len(rec.key))
+			}
+			// The accessors every caller uses must not read out of bounds.
+			rec.object()
+			rec.kind()
+			rec.treeID(true)
+		}
+	})
+}
+
+func FuzzOpenReader(f *testing.F) {
+	f.Add(rangedFixture())
+	f.Add(rangedFixtureNamed(`a\b`))
+	f.Add(make([]byte, readerBlockSize))
+	f.Fuzz(func(t *testing.T, image []byte) {
+		resealFuzzImage(image)
+		fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
+		if err != nil {
+			return
+		}
+		entries, err := fs.ReadDirID(types.ROOT_DIR_INO_NUM)
+		if err != nil {
+			return
+		}
+		buf := make([]byte, 1<<16)
+		for _, entry := range entries[:min(len(entries), 8)] {
+			if found, err := fs.Lookup("/" + entry.Name); err == nil && found.Name != entry.Name {
+				t.Fatalf("Lookup(%q) returned %q", entry.Name, found.Name)
+			}
+			fs.Readlink(entry.ID)
+			file, err := fs.OpenFileID(entry.ID)
+			if err != nil {
+				continue
+			}
+			if file.Size < 0 {
+				t.Fatalf("file size %d", file.Size)
+			}
+			// Sizes come from the image, so read the two ends, not the whole.
+			for _, off := range []int64{0, max(0, file.Size-int64(len(buf)))} {
+				if n, err := file.ReadAt(buf, off); n < 0 || n > len(buf) || int64(n) > file.Size-off || (err == nil && n != len(buf)) {
+					t.Fatalf("ReadAt(%d) of a %d-byte file = %d, %v", off, file.Size, n, err)
+				}
+			}
+		}
+	})
+}
+
+func FuzzDecodeReaderBlock(f *testing.F) {
+	lzvn, _ := hex.DecodeString(lzvnFixture)
+	lzbitmap, _ := hex.DecodeString(lzbitmapFixture)
+	f.Add(lzvn, uint16(len(compressedPlain)), cmpRsrcLZVN)
+	f.Add(lzfse.EncodeBuffer(compressedPlain), uint16(len(compressedPlain)), cmpRsrcLZFSE)
+	f.Add(lzbitmap, uint16(len(compressedPlain)), cmpRsrcLZBitmap)
+	f.Add([]byte{6, 1, 2}, uint16(2), cmpRsrcLZVN)
+	f.Add([]byte{0x0f, 1, 2}, uint16(2), cmpAttrZlib)
+	f.Fuzz(func(t *testing.T, data []byte, size uint16, method uint32) {
+		for _, decode := range []func() ([]byte, error){
+			func() ([]byte, error) { return decodeReaderBlock(data, int(size), method) },
+			func() ([]byte, error) { return decodeInline(data, uint64(size), method) },
+		} {
+			if out, err := decode(); err == nil && len(out) != int(size) {
+				t.Fatalf("method %d decoded %d bytes for a declared size of %d", method, len(out), size)
+			}
+		}
+	})
+}
