@@ -23,6 +23,8 @@ const (
 	readerBlockCache     = 4096                        // blocks cached per Reader
 	readerMaxCheckpoints = 4096                        // checkpoint descriptor blocks scanned at open
 	readerMaxNodes       = 4096                        // nodes visited per record lookup
+	readerMaxNodeRecords = 1024                        // records in one B-tree node
+	readerMaxRecords     = 1 << 20                     // records returned by one lookup
 	readerMaxDepth       = 32                          // B-tree levels
 	readerChunkSize      = 65536                       // decmpfs resource chunk
 	readerChunkCache     = 128                         // decoded chunks cached per compressed File
@@ -30,7 +32,9 @@ const (
 	readerMaxCompressed  = 64 << 30                    // decoded size of a resource-compressed file
 	readerMaxLink        = 4096                        // symbolic link target
 
-	decmpfsMagic = 0x636d7066 // types.DECMPFS_MAGIC ("cmpf") as a little-endian uint32
+	// decmpfsMagic is the decmpfs FourCC "cmpf", stored on disk as the bytes
+	// "fpmc" and read here as a little-endian uint32.
+	decmpfsMagic = 0x636d7066
 )
 
 // Builtin-typed views of the constants in package types, whose named types
@@ -157,7 +161,7 @@ func OpenReader(source io.ReaderAt, size int64) (*Reader, error) {
 	latest := le.Uint64(container[16:])
 	candidate := make([]byte, readerBlockSize)
 	for i := range count {
-		if _, err := source.ReadAt(candidate, int64(base+i)*readerBlockSize); err != nil {
+		if err := readFull(source, candidate, int64(base+i)*readerBlockSize); err != nil {
 			return nil, err
 		}
 		if xid := le.Uint64(candidate[16:]); string(candidate[32:36]) == types.NX_MAGIC && xid > latest && validChecksum(candidate) {
@@ -206,6 +210,20 @@ func OpenReader(source io.ReaderAt, size int64) (*Reader, error) {
 	return r, nil
 }
 
+// readFull fills p from source at off. io.ReaderAt allows a read that ends at
+// the end of its input to return io.EOF along with all the bytes, so only a
+// short read is an error.
+func readFull(source io.ReaderAt, p []byte, off int64) error {
+	n, err := source.ReadAt(p, off)
+	if n == len(p) {
+		return nil
+	}
+	if err == nil {
+		err = io.ErrUnexpectedEOF
+	}
+	return err
+}
+
 // validChecksum reports whether a block's object header holds the Fletcher-64
 // checksum of the rest of the block. types.VerifyChecksum is not used because
 // it accepts any block whose words do not sum to zero.
@@ -224,7 +242,7 @@ func (r *Reader) block(address uint64, hash []byte, treeNode bool) ([]byte, erro
 	block, cached := r.cache.Get(address)
 	if !cached {
 		data := make([]byte, readerBlockSize)
-		if _, err := r.source.ReadAt(data, int64(address)*readerBlockSize); err != nil {
+		if err := readFull(r.source, data, int64(address)*readerBlockSize); err != nil {
 			return nil, err
 		}
 		block = &readerBlock{data: data, checksummed: validChecksum(data)}
@@ -256,6 +274,9 @@ func parseReaderNode(data []byte) (readerNode, error) {
 	}
 	node.flags = le.Uint16(data[32:])
 	node.level = le.Uint16(data[34:])
+	if le.Uint32(data[36:]) > readerMaxNodeRecords {
+		return node, fmt.Errorf("invalid APFS node table")
+	}
 	count := int(le.Uint32(data[36:]))
 	tableOffset := int(le.Uint16(data[40:]))
 	tableSize := int(le.Uint16(data[42:]))
@@ -275,7 +296,7 @@ func parseReaderNode(data []byte) (readerNode, error) {
 	if node.level > 0 && count == 0 {
 		return node, fmt.Errorf("empty APFS index node")
 	}
-	if node.level >= readerMaxDepth || count > 1024 || tableOffset+count*stride > tableSize || keyBase > valueEnd {
+	if node.level >= readerMaxDepth || tableOffset+count*stride > tableSize || keyBase > valueEnd {
 		return node, fmt.Errorf("invalid APFS node table")
 	}
 	node.records = make([]record, 0, count)
@@ -370,6 +391,9 @@ func (r *Reader) collect(result []record, address, object uint64, physical bool,
 				result = append(result, rec)
 			}
 		}
+		if len(result) > readerMaxRecords {
+			return nil, fmt.Errorf("APFS object %#x exceeds the record limit", object)
+		}
 		return result, nil
 	}
 	for i, rec := range node.records {
@@ -426,7 +450,7 @@ func (r *Reader) scanDir(id uint64, visit func(name []byte, id uint64, kind uint
 			return io.ErrUnexpectedEOF
 		}
 		name := bytes.TrimSuffix(rec.key[12:12+length], []byte{0})
-		if len(name) == 0 || string(name) == "." || string(name) == ".." || bytes.ContainsAny(name, "/\\\x00") {
+		if len(name) == 0 || string(name) == "." || string(name) == ".." || bytes.ContainsAny(name, "/\x00") {
 			return fmt.Errorf("unsafe APFS name %q", name)
 		}
 		visit(name, le.Uint64(rec.value), le.Uint16(rec.value[16:])&uint16(types.DREC_TYPE_MASK))
@@ -536,8 +560,8 @@ func (r *extentReader) ReadAt(p []byte, off int64) (int, error) {
 	if off >= r.size {
 		return 0, io.EOF
 	}
-	want := min(len(p), int(r.size-off))
-	n := 0
+	want := min(int64(len(p)), r.size-off)
+	var n int64
 	first := sort.Search(len(r.extents), func(i int) bool {
 		return r.extents[i].logical+r.extents[i].length > uint64(off)
 	})
@@ -546,18 +570,21 @@ func (r *extentReader) ReadAt(p []byte, off int64) (int, error) {
 			break
 		}
 		within := uint64(off) - e.logical
-		length := min(want-n, int(e.length-within))
+		length := int64(min(uint64(want-n), e.length-within))
 		count, err := r.source.ReadAt(p[n:n+length], int64(e.physical*readerBlockSize+within))
-		n += count
+		n += int64(count)
 		off += int64(count)
-		if err != nil {
-			return n, err
+		if int64(count) < length {
+			if err == nil {
+				err = io.ErrUnexpectedEOF
+			}
+			return int(n), err
 		}
 	}
-	if n < len(p) {
-		return n, io.EOF
+	if n < int64(len(p)) {
+		return int(n), io.EOF
 	}
-	return n, nil
+	return int(n), nil
 }
 
 // parseXattr decodes an extended-attribute record into its name, flags, and
@@ -605,7 +632,7 @@ func (r *Reader) xattrValue(flags uint16, data []byte, limit int64) ([]byte, err
 		return nil, fmt.Errorf("APFS extended attribute exceeds limit")
 	}
 	value := make([]byte, stream.Size)
-	if n, err := stream.ReadAt(value, 0); n != len(value) {
+	if err := readFull(stream, value, 0); err != nil {
 		return nil, err
 	}
 	return value, nil
@@ -711,7 +738,7 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 		return nil, err
 	}
 	var inode, compression, resource []byte
-	var compressionFlags uint16
+	var compressionFlags, resourceFlags uint16
 	var extents []readerExtent
 	for _, rec := range records {
 		switch rec.kind() {
@@ -726,10 +753,7 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 			case types.XATTR_DECMPFS_EA_NAME:
 				compression, compressionFlags = data, flags
 			case types.XATTR_RESOURCEFORK_EA_NAME:
-				if flags&xattrStream == 0 {
-					return nil, fmt.Errorf("embedded resource fork unsupported")
-				}
-				resource = data
+				resource, resourceFlags = data, flags
 			}
 		case kindFileExtent:
 			extent, err := parseExtent(rec)
@@ -749,7 +773,7 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 		if err != nil {
 			return nil, err
 		}
-		file, err = r.openCompressed(header, resource)
+		file, err = r.openCompressed(header, resource, resourceFlags)
 		if err != nil {
 			return nil, err
 		}
@@ -758,8 +782,12 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(extents) == 0 && size > 0 {
-			extents, err = r.extents(le.Uint64(inode[8:]))
+		// Extents are keyed by the data stream's private ID. The records found
+		// under the inode number are that stream's only when the two are equal.
+		if private := le.Uint64(inode[8:]); size == 0 {
+			extents = nil
+		} else if private != id || len(extents) == 0 {
+			extents, err = r.extents(private)
 			if err != nil {
 				return nil, err
 			}
@@ -775,7 +803,7 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 
 // openCompressed opens a decmpfs file whose payload is either inline in the
 // header attribute or chunked in the resource fork.
-func (r *Reader) openCompressed(header, resource []byte) (*File, error) {
+func (r *Reader) openCompressed(header, resource []byte, resourceFlags uint16) (*File, error) {
 	if len(header) < 16 || le.Uint32(header) != decmpfsMagic {
 		return nil, fmt.Errorf("invalid decmpfs header")
 	}
@@ -788,6 +816,9 @@ func (r *Reader) openCompressed(header, resource []byte) (*File, error) {
 			return nil, err
 		}
 		return &File{ReaderAt: bytes.NewReader(data), Size: int64(len(data))}, nil
+	}
+	if resource != nil && resourceFlags&xattrStream == 0 {
+		return nil, fmt.Errorf("embedded resource fork unsupported")
 	}
 	if len(resource) < 48 {
 		return nil, fmt.Errorf("missing APFS resource stream")
@@ -867,6 +898,11 @@ func decodeReaderBlock(data []byte, size int, method uint32) ([]byte, error) {
 		if data[0] == 0xff {
 			return storedBlock(data, size)
 		}
+		// The decoder does not report how much it wrote, so a short stream
+		// would otherwise come back padded with zeros.
+		if declared, ok := lzbitmapSize(data); !ok || declared != size {
+			return nil, fmt.Errorf("LZBITMAP size mismatch")
+		}
 		result := make([]byte, size)
 		if status := lzfse.LzBitMapDecompress(data, result); status != 0 {
 			return nil, fmt.Errorf("LZBITMAP status %d", status)
@@ -875,6 +911,27 @@ func decodeReaderBlock(data []byte, size int, method uint32) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unsupported APFS resource compression %d", method)
 	}
+}
+
+// lzbitmapSize returns the decoded size that an LZBITMAP stream declares. The
+// stream is a 4-byte magic followed by chunks, each starting with its 3-byte
+// total length and 3-byte decoded length, and ends at a chunk that decodes to
+// nothing.
+func lzbitmapSize(data []byte) (int, bool) {
+	u24 := func(b []byte) int { return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 }
+	total := 0
+	for pos := 4; pos+6 <= len(data); {
+		length, decoded := u24(data[pos:]), u24(data[pos+3:])
+		if decoded == 0 {
+			return total, true
+		}
+		if length < 6 || length > len(data)-pos {
+			return 0, false
+		}
+		total += decoded
+		pos += length
+	}
+	return 0, false
 }
 
 // storedBlock returns the payload of an uncompressed block, minus its marker.
@@ -894,15 +951,16 @@ type compressedReader struct {
 }
 
 func newCompressedFile(source *File, size uint64, method uint32) (*File, error) {
-	if size == 0 || size > readerMaxCompressed || (method != cmpRsrcLZVN && method != cmpRsrcLZFSE && method != cmpRsrcLZBitmap) {
+	if method != cmpRsrcLZVN && method != cmpRsrcLZFSE && method != cmpRsrcLZBitmap {
 		return nil, fmt.Errorf("unsupported resource compression %d", method)
 	}
-	count := (size + readerChunkSize - 1) / readerChunkSize
-	if count > 1<<20 {
-		return nil, fmt.Errorf("resource index exceeds limit")
+	if size == 0 || size > readerMaxCompressed {
+		return nil, fmt.Errorf("resource-compressed size %d out of range", size)
 	}
+	// readerMaxCompressed bounds the table at 2^20 chunks.
+	count := (size + readerChunkSize - 1) / readerChunkSize
 	table := make([]byte, (count+1)*4)
-	if _, err := source.ReadAt(table, 0); err != nil {
+	if err := readFull(source, table, 0); err != nil {
 		return nil, err
 	}
 	offsets := make([]uint32, count+1)
@@ -948,7 +1006,7 @@ func (r *compressedReader) chunk(index int) ([]byte, error) {
 		return data, nil
 	}
 	encoded := make([]byte, r.offsets[index+1]-r.offsets[index])
-	if _, err := r.source.ReadAt(encoded, int64(r.offsets[index])); err != nil {
+	if err := readFull(r.source, encoded, int64(r.offsets[index])); err != nil {
 		return nil, err
 	}
 	size := min(int64(readerChunkSize), r.size-int64(index)*readerChunkSize)
