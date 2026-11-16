@@ -178,6 +178,7 @@ func rangedFixtureNamed(first string) []byte {
 	b := block(0)
 	copy(b[32:], types.NX_MAGIC)
 	le.PutUint32(b[36:], readerBlockSize)
+	le.PutUint64(b[40:], payloadBlock+2)
 	le.PutUint64(b[16:], 1)
 	le.PutUint64(b[160:], 1)
 	le.PutUint64(b[184:], 100)
@@ -459,6 +460,7 @@ func TestReaderLatestCheckpoint(t *testing.T) {
 	n := len(image) / readerBlockSize
 	good := bytes.Clone(image[:readerBlockSize])
 	le.PutUint64(good[16:], 2)
+	le.PutUint64(good[40:], uint64(n+2))
 	sealTestBlock(good)
 	bad := bytes.Clone(good) // newer, but its checksum is stale: must be ignored
 	le.PutUint64(bad[16:], 3)
@@ -491,11 +493,50 @@ func TestReaderRejectsUnsupportedContainers(t *testing.T) {
 			return image
 		},
 		"a truncated image": func(image []byte) []byte { return image[:readerBlockSize-1] },
+		"no blocks": func(image []byte) []byte {
+			le.PutUint64(image[40:], 0)
+			sealTestBlock(image[:readerBlockSize])
+			return image
+		},
+		"more blocks than the image": func(image []byte) []byte {
+			le.PutUint64(image[40:], uint64(len(image)/readerBlockSize)+1)
+			sealTestBlock(image[:readerBlockSize])
+			return image
+		},
 	} {
 		image := mutate(rangedFixture())
 		if _, err := OpenReader(bytes.NewReader(image), int64(len(image))); err == nil {
 			t.Fatalf("opened a container with %s", name)
 		}
+	}
+}
+
+// A size that is only an upper bound must not widen the container: metadata
+// and extents aimed past its block count fail the bounds checks.
+func TestReaderContainerBlockCount(t *testing.T) {
+	padded := func() []byte { return append(rangedFixture(), make([]byte, 4*readerBlockSize)...) }
+	image := padded()
+	blocks := uint64(len(rangedFixture()) / readerBlockSize)
+	fs, err := OpenReader(bytes.NewReader(image), int64(len(image)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file, err := fs.OpenFileID(3); err != nil || file.Size != 7 {
+		t.Fatal(file, err)
+	}
+	if _, err := fs.block(blocks, nil, false); err == nil || !strings.Contains(err.Error(), "outside image") {
+		t.Fatalf("read a block past the container: %v", err)
+	}
+	if _, err := fs.extentFile([]readerExtent{{logical: 0, physical: blocks - 1, length: 2 * readerBlockSize}}, 1); err == nil {
+		t.Fatal("accepted an extent that runs past the container")
+	}
+
+	image = padded()
+	volume := image[3*readerBlockSize : 4*readerBlockSize]
+	le.PutUint64(volume[128:], blocks) // object map in the padding
+	sealTestBlock(volume)
+	if _, err := OpenReader(bytes.NewReader(image), int64(len(image))); err == nil || !strings.Contains(err.Error(), "outside image") {
+		t.Fatalf("followed a pointer past the container: %v", err)
 	}
 }
 

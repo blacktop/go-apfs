@@ -137,7 +137,8 @@ type File struct {
 }
 
 // OpenReader opens the container held in the first size bytes of source, using
-// its most recent valid checkpoint. It returns an error unless the container
+// its most recent valid checkpoint; size may exceed the container, whose own
+// block count bounds every address. It returns an error unless the container
 // has 4 KiB blocks and exactly one volume.
 func OpenReader(source io.ReaderAt, size int64) (*Reader, error) {
 	if size < readerBlockSize {
@@ -169,6 +170,13 @@ func OpenReader(source io.ReaderAt, size int64) (*Reader, error) {
 			candidate = make([]byte, readerBlockSize)
 		}
 	}
+	// size may only be an upper bound, so the container's own block count
+	// bounds every later address.
+	total := le.Uint64(container[40:])
+	if total == 0 || total > blocks {
+		return nil, fmt.Errorf("APFS container of %d blocks in an image of %d", total, blocks)
+	}
+	r.size = int64(total) * readerBlockSize
 	volumeOID := le.Uint64(container[184:])
 	volumes := 0
 	for i := range types.NX_MAX_FILE_SYSTEMS {
