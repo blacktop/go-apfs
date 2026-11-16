@@ -18,6 +18,17 @@ func isStoredLZBitmap(marker byte) bool {
 	return marker == 0x06 || marker == 0xFF
 }
 
+func decodeLZBitmap(src, dst []byte) error {
+	status, n := lzfse.LzBitMapDecompressLen(src, dst)
+	if status != 0 {
+		return fmt.Errorf("decoder status %d", status)
+	}
+	if n != len(dst) {
+		return fmt.Errorf("decoded %d bytes, want %d", n, len(dst))
+	}
+	return nil
+}
+
 func (h *DecmpfsDiskHeader) decompressLZBitmapAttr(decomp *bufio.Writer) error {
 	size := h.UncompressedSize
 	if size > decmpfsChunkSize {
@@ -33,8 +44,8 @@ func (h *DecmpfsDiskHeader) decompressLZBitmapAttr(decomp *bufio.Writer) error {
 		}
 	} else {
 		out = make([]byte, size)
-		if lzfse.LzBitMapDecompress(h.AttrBytes, out) != 0 {
-			return fmt.Errorf("failed to decode CMP_ATTR_LZBITMAP data into %d bytes", size)
+		if err := decodeLZBitmap(h.AttrBytes, out); err != nil {
+			return fmt.Errorf("failed to decode CMP_ATTR_LZBITMAP data: %w", err)
 		}
 	}
 	if _, err := decomp.Write(out); err != nil {
@@ -135,8 +146,8 @@ func decompressLZBitmapRsrc(rsrc *bytes.Reader, decomp *bufio.Writer, size uint6
 			}
 			out = payload[:want]
 		} else {
-			if lzfse.LzBitMapDecompress(chunk, dst[:want]) != 0 {
-				return fmt.Errorf("failed to decode CMP_RSRC_LZBITMAP block %d into %d bytes", idx, want)
+			if err := decodeLZBitmap(chunk, dst[:want]); err != nil {
+				return fmt.Errorf("failed to decode CMP_RSRC_LZBITMAP block %d: %w", idx, err)
 			}
 			out = dst[:want]
 		}

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -112,6 +113,31 @@ func TestDecompressLZBitmapCompressedChunk(t *testing.T) {
 			}
 			if !bytes.Equal(out.Bytes(), plain) {
 				t.Fatalf("decoded %d bytes that differ from the %d-byte plaintext", out.Len(), len(plain))
+			}
+		})
+	}
+}
+
+func TestDecompressLZBitmapRejectsShortDecode(t *testing.T) {
+	compressed, err := hex.DecodeString(lzbitmapChunkHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := uint64(len(lzbitmapChunkPlain()) + 100)
+	fork := chunkedFork(compressed)
+	for _, tt := range []struct {
+		name string
+		h    *DecmpfsDiskHeader
+		fork []byte
+	}{
+		{"resource fork", header(CMP_RSRC_LZBITMAP, size, nil), fork},
+		{"attribute", header(CMP_ATTR_LZBITMAP, size, compressed), nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := bufio.NewWriter(&bytes.Buffer{})
+			err := tt.h.DecompressFile(bytes.NewReader(tt.fork), w, []FileExtent{{Block: 0, Length: uint64(len(tt.fork))}}, true)
+			if err == nil || !strings.Contains(err.Error(), "decoded 1024 bytes, want 1124") {
+				t.Fatalf("DecompressFile error = %v, want a short-decode error", err)
 			}
 		})
 	}
