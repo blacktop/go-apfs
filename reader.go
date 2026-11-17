@@ -924,40 +924,18 @@ func decodeReaderBlock(data []byte, size int, method uint32) ([]byte, error) {
 		if data[0] == 0xff {
 			return storedBlock(data, size)
 		}
-		// The decoder does not report how much it wrote, so a short stream
-		// would otherwise come back padded with zeros.
-		if declared, ok := lzbitmapSize(data); !ok || declared != size {
-			return nil, fmt.Errorf("LZBITMAP size mismatch")
-		}
 		result := make([]byte, size)
-		if status := lzfse.LzBitMapDecompress(data, result); status != 0 {
+		status, n := lzfse.LzBitMapDecompressLen(data, result)
+		if status != 0 {
 			return nil, fmt.Errorf("LZBITMAP status %d", status)
+		}
+		if n != size {
+			return nil, fmt.Errorf("LZBITMAP size mismatch")
 		}
 		return result, nil
 	default:
 		return nil, fmt.Errorf("unsupported APFS resource compression %d", method)
 	}
-}
-
-// lzbitmapSize returns the decoded size that an LZBITMAP stream declares. The
-// stream is a 4-byte magic followed by chunks, each starting with its 3-byte
-// total length and 3-byte decoded length, and ends at a chunk that decodes to
-// nothing.
-func lzbitmapSize(data []byte) (int, bool) {
-	u24 := func(b []byte) int { return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 }
-	total := 0
-	for pos := 4; pos+6 <= len(data); {
-		length, decoded := u24(data[pos:]), u24(data[pos+3:])
-		if decoded == 0 {
-			return total, true
-		}
-		if length < 6 || length > len(data)-pos {
-			return 0, false
-		}
-		total += decoded
-		pos += length
-	}
-	return 0, false
 }
 
 // storedBlock returns the payload of an uncompressed block, minus its marker.
