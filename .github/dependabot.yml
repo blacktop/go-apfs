@@ -3,30 +3,26 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "daily"
-      time: "08:00"
-    labels:
-      - "dependencies"
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      gomod:
+        patterns:
+          - "*"
     commit-message:
-      prefix: "feat"
+      prefix: "chore"
       include: "scope"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
-      time: "08:00"
-    labels:
-      - "dependencies"
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
     commit-message:
-      prefix: "feat"
-      include: "scope"
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "daily"
-      time: "08:00"
-    labels:
-      - "dependencies"
-    commit-message:
-      prefix: "feat"
+      prefix: "chore"
       include: "scope"

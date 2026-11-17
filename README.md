@@ -1,4 +1,4 @@
-# [WIP] go-apfs 🚧
+# go-apfs
 
 [![Go](https://github.com/blacktop/go-apfs/actions/workflows/go.yml/badge.svg)](https://github.com/blacktop/go-apfs/actions/workflows/go.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/blacktop/go-apfs.svg)](https://pkg.go.dev/github.com/blacktop/go-apfs) [![GitHub](https://img.shields.io/github/license/blacktop/go-apfs)](https://github.com/blacktop/go-apfs/blob/main/LICENSE)
 

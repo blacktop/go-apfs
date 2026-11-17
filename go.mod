@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/apex/log v1.9.0
 	github.com/blacktop/go-plist v1.0.2
-	github.com/blacktop/lzfse-cgo v1.2.0
+	github.com/blacktop/lzfse-cgo v1.3.0
 	github.com/dustin/go-humanize v1.1.0
 	github.com/fatih/color v1.19.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7

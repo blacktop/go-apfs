@@ -14,7 +14,7 @@ func checkpointMapBlock(count uint32, entries int) []byte {
 	binary.LittleEndian.PutUint32(block[24:], uint32(OBJECT_TYPE_CHECKPOINT_MAP))
 	binary.LittleEndian.PutUint32(block[32:], uint32(CHECKPOINT_MAP_LAST))
 	binary.LittleEndian.PutUint32(block[36:], count)
-	for i := 0; i < entries; i++ {
+	for i := range entries {
 		binary.LittleEndian.PutUint64(block[40+i*40+32:], uint64(0x1000+i))
 	}
 	binary.LittleEndian.PutUint64(block[0:], CreateChecksum(block[8:]))
