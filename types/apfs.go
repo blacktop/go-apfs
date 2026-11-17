@@ -183,6 +183,7 @@ type ApfsSuperblock struct {
 	OMap          *Obj
 	ExtentRefTree *Obj
 	SnapMetaTree  *Obj
+	FextTree      *Obj
 
 	block
 }

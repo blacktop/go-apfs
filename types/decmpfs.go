@@ -460,7 +460,9 @@ func (h *DecmpfsDiskHeader) DecompressFile(r io.ReaderAt, decomp *bufio.Writer, 
 			return fmt.Errorf("failed to write CMP_RSRC_UNCOMPRESSED data: %w", err)
 		}
 	case CMP_ATTR_LZBITMAP:
+		return h.decompressLZBitmapAttr(decomp)
 	case CMP_RSRC_LZBITMAP:
+		return decompressLZBitmapRsrc(rsrc, decomp, h.UncompressedSize, nobar)
 	default:
 		return fmt.Errorf("unknown or unsupported compression type: %s", h.CompressionType)
 	}

@@ -291,6 +291,31 @@ func TestCopyRejectsShortFile(t *testing.T) {
 	}
 }
 
+func TestFextExtentsHandlesUnsealedVolume(t *testing.T) {
+	fs := copyTestFS()
+	fexts, err := fs.fextExtents(20)
+	if err != nil || fexts != nil {
+		t.Fatalf("fextExtents on an unsealed volume = (%v, %v), want (nil, nil)", fexts, err)
+	}
+}
+
+func TestResourceForkExtentsFromFSTree(t *testing.T) {
+	fs := copyTestFS(copyTestExtent(30))
+	fexts, err := fs.resourceForkExtents(30)
+	if err != nil || len(fexts) != 1 {
+		t.Fatalf("resourceForkExtents = (%v, %v), want one extent", fexts, err)
+	}
+}
+
+func TestResourceForkExtentsWithoutFextTree(t *testing.T) {
+	dstreamID := types.NodeEntry{Hdr: types.JKeyT{ObjIDAndType: 30 | uint64(types.APFS_TYPE_DSTREAM_ID)<<types.OBJ_TYPE_SHIFT}}
+	fs := copyTestFS(dstreamID)
+	fexts, err := fs.resourceForkExtents(30)
+	if err != nil || fexts != nil {
+		t.Fatalf("resourceForkExtents = (%v, %v), want (nil, nil)", fexts, err)
+	}
+}
+
 func catStdout(t *testing.T, fs *APFS, path string) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -309,6 +334,20 @@ func catStdout(t *testing.T, fs *APFS, path string) string {
 		t.Fatal(catErr)
 	}
 	return string(out)
+}
+
+func TestCatWritesDataForkOnceWithResourceFork(t *testing.T) {
+	const rsrcOid = 21
+	rsrcXattr := types.NodeEntry{
+		Hdr: types.JKeyT{ObjIDAndType: 20 | uint64(types.APFS_TYPE_XATTR)<<types.OBJ_TYPE_SHIFT},
+		Key: types.JXattrKeyT{Name: types.XATTR_RESOURCEFORK_EA_NAME},
+		Val: types.JXattrValT{Flags: types.XATTR_DATA_STREAM, Data: types.JXattrDstreamT{XattrObjID: rsrcOid}},
+	}
+	rsrcStream := types.NodeEntry{Hdr: types.JKeyT{ObjIDAndType: rsrcOid | uint64(types.APFS_TYPE_DSTREAM_ID)<<types.OBJ_TYPE_SHIFT}}
+	fs := copyTestFS(append(copyTestFile(10, 20, "f"), rsrcXattr, rsrcStream)...)
+	if got := catStdout(t, fs, "/source/f"); got != copyTestData {
+		t.Fatalf("Cat wrote %q, want %q", got, copyTestData)
+	}
 }
 
 func TestCopyNamesFileByDirectoryEntry(t *testing.T) {
