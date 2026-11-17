@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/apex/log v1.9.0
-	github.com/blacktop/go-apfs v1.0.31
+	github.com/blacktop/go-apfs v1.0.32
 	github.com/c-bata/go-prompt v0.2.6
 	github.com/fatih/color v1.19.0
 	github.com/spf13/cobra v1.9.1
@@ -15,7 +15,7 @@ require (
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/blacktop/go-plist v1.0.2 // indirect
-	github.com/blacktop/lzfse-cgo v1.2.0 // indirect
+	github.com/blacktop/lzfse-cgo v1.3.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
