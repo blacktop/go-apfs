@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -566,8 +568,44 @@ func TestReaderOpenFileErrors(t *testing.T) {
 	if _, err := newCompressedFile(fork, 0, cmpRsrcLZVN); err == nil || errContains(err, "unsupported resource compression") {
 		t.Fatalf("error = %v, want a size error", err)
 	}
-	if _, err := newCompressedFile(fork, 1, uint32(types.CMP_RSRC_ZLIB)); !errContains(err, "unsupported resource compression") {
+	if _, err := newCompressedFile(fork, 1, uint32(types.CMP_MAX)); !errContains(err, "unsupported resource compression") {
 		t.Fatalf("error = %v, want an unsupported-method error", err)
+	}
+}
+
+// TestReaderResourceTable checks the offset table shared by the LZVN, LZFSE and
+// LZBITMAP forks. Only the table is validated at open, so chunk bytes are placeholders.
+func TestReaderResourceTable(t *testing.T) {
+	open := func(fork []byte) error {
+		source := &File{ReaderAt: bytes.NewReader(fork), Size: int64(len(fork))}
+		_, err := newCompressedFile(source, readerChunkSize+1, cmpRsrcLZVN)
+		return err
+	}
+	fork := testFork([]byte{6, 'A'}, []byte{6, 'B'})
+	if err := open(fork); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		offset int
+		value  uint32
+		want   string
+	}{
+		{0, 8, "invalid resource table"},                     // first chunk starts inside the table
+		{8, uint32(len(fork)) + 1, "invalid resource table"}, // last chunk ends past the fork
+		{4, 12, "invalid resource offsets"},                  // first chunk is empty
+	} {
+		bad := bytes.Clone(fork)
+		le.PutUint32(bad[tc.offset:], tc.value)
+		if err := open(bad); !errContains(err, tc.want) {
+			t.Fatalf("offset %d: error = %v, want %q", tc.offset, err, tc.want)
+		}
+	}
+	oversized := testFork(make([]byte, readerChunkSize+2), []byte{6, 'B'})
+	if err := open(oversized); !errContains(err, "invalid resource offsets") {
+		t.Fatalf("oversized chunk: error = %v, want an offsets error", err)
+	}
+	if err := open(fork[:8]); !errors.Is(err, io.EOF) {
+		t.Fatalf("truncated table: error = %v, want io.EOF", err)
 	}
 }
 
@@ -592,6 +630,77 @@ func TestReaderDstreamSize(t *testing.T) {
 	}
 	if _, err := dstreamSize(inode[:94]); err == nil {
 		t.Fatal("accepted a truncated field table")
+	}
+}
+
+func TestReaderZlibResource(t *testing.T) {
+	plain := bytes.Repeat([]byte("A"), readerChunkSize)
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	if _, err := w.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A zlib block, the largest stored block (marker plus 64 KiB), and a short stored block.
+	stored := append([]byte{0xff}, bytes.Repeat([]byte("B"), readerChunkSize)...)
+	blocks := [][]byte{buf.Bytes(), stored, {0xff, 'E', 'N', 'D'}}
+	pos := 4 + 8*len(blocks)
+	resource := le.AppendUint32(nil, uint32(len(blocks)))
+	for _, block := range blocks {
+		resource = le.AppendUint32(resource, uint32(pos))
+		resource = le.AppendUint32(resource, uint32(len(block)))
+		pos += len(block)
+	}
+	for _, block := range blocks {
+		resource = append(resource, block...)
+	}
+	const dataOffset = 256
+	fork := make([]byte, dataOffset)
+	binary.BigEndian.PutUint32(fork, dataOffset)
+	binary.BigEndian.PutUint32(fork[8:], uint32(len(resource)+4))
+	fork = binary.BigEndian.AppendUint32(fork, uint32(len(resource)))
+	fork = append(fork, resource...)
+	open := func(data []byte) (*File, error) {
+		source := &File{ReaderAt: bytes.NewReader(data), Size: int64(len(data))}
+		return newCompressedFile(source, 2*readerChunkSize+3, cmpRsrcZlib)
+	}
+	file, err := open(fork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out [7]byte
+	n, err := file.ReadAt(out[:], readerChunkSize-3)
+	if n != 7 || err != nil || string(out[:]) != "AAABBBB" {
+		t.Fatalf("zlib-to-stored read = %q, %d, %v", out, n, err)
+	}
+	n, err = file.ReadAt(out[:], 2*readerChunkSize-3)
+	if n != 6 || err != io.EOF || string(out[:n]) != "BBBEND" {
+		t.Fatalf("read to end = %q, %d, %v", out, n, err)
+	}
+	be := binary.BigEndian
+	for _, tc := range []struct {
+		offset int
+		order  binary.ByteOrder
+		value  uint32
+		want   string
+	}{
+		{0, be, 8, "data area"},                                  // data area overlaps the header
+		{8, be, uint32(len(fork) - dataOffset + 1), "data area"}, // data area extends past the fork
+		{8, be, 8, "data area"},                                  // data area too small for its table
+		{dataOffset, be, uint32(len(resource) + 1), "table"},     // resource overruns the data area
+		{dataOffset + 4, le, 2, "table"},                         // count disagrees with uncompressed size
+		{dataOffset + 8, le, 0, "chunk 0"},                       // block starts inside the table
+		{dataOffset + 12, le, 0, "chunk 0"},                      // block is empty
+		{dataOffset + 12, le, readerChunkSize + 2, "chunk 0"},    // chunk() would allocate past a stored block
+		{dataOffset + 28, le, 5, "chunk 2"},                      // last block ends past the resource
+	} {
+		bad := bytes.Clone(fork)
+		tc.order.PutUint32(bad[tc.offset:], tc.value)
+		if _, err := open(bad); !errContains(err, "invalid zlib resource "+tc.want) {
+			t.Fatalf("field at offset %d: error = %v, want %q", tc.offset, err, tc.want)
+		}
 	}
 }
 

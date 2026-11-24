@@ -55,6 +55,7 @@ const (
 	xattrEmbedded = uint16(types.XATTR_DATA_EMBEDDED)
 
 	cmpAttrZlib         = uint32(types.CMP_ATTR_ZLIB)
+	cmpRsrcZlib         = uint32(types.CMP_RSRC_ZLIB)
 	cmpAttrLZVN         = uint32(types.CMP_ATTR_LZVN)
 	cmpRsrcLZVN         = uint32(types.CMP_RSRC_LZVN)
 	cmpAttrUncompressed = uint32(types.CMP_ATTR_UNCOMPRESSED)
@@ -756,7 +757,7 @@ func inodeMode(inode []byte) fs.FileMode {
 
 // OpenFileID opens the file with inode number id. It supports plain files and
 // decmpfs-compressed files (zlib, LZVN, LZFSE, LZBITMAP and uncompressed inline;
-// LZVN, LZFSE and LZBITMAP in the resource fork), and rejects sparse files. An
+// zlib, LZVN, LZFSE and LZBITMAP in the resource fork), and rejects sparse files. An
 // id without an inode record is an error.
 func (r *Reader) OpenFileID(id uint64) (*File, error) {
 	records, err := r.records(id, false)
@@ -902,6 +903,8 @@ func decodeReaderBlock(data []byte, size int, method uint32) ([]byte, error) {
 		return nil, fmt.Errorf("invalid APFS compressed block")
 	}
 	switch method {
+	case cmpRsrcZlib:
+		return decodeInline(data, uint64(size), cmpAttrZlib)
 	case cmpRsrcLZVN:
 		if data[0] == 6 {
 			return storedBlock(data, size)
@@ -946,39 +949,97 @@ func storedBlock(data []byte, size int) ([]byte, error) {
 	return bytes.Clone(data[1:]), nil
 }
 
+type resourceChunk struct {
+	offset int64 // from the start of the fork
+	length uint32
+}
+
 type compressedReader struct {
-	source  *File
-	offsets []uint32
-	size    int64
-	method  uint32
-	cache   *lru.Cache[int, []byte]
+	source *File
+	chunks []resourceChunk
+	size   int64
+	method uint32
+	cache  *lru.Cache[int, []byte]
 }
 
 func newCompressedFile(source *File, size uint64, method uint32) (*File, error) {
-	if method != cmpRsrcLZVN && method != cmpRsrcLZFSE && method != cmpRsrcLZBitmap {
-		return nil, fmt.Errorf("unsupported resource compression %d", method)
-	}
 	if size == 0 || size > readerMaxCompressed {
 		return nil, fmt.Errorf("resource-compressed size %d out of range", size)
 	}
 	// readerMaxCompressed bounds the table at 2^20 chunks.
 	count := (size + readerChunkSize - 1) / readerChunkSize
+	var chunks []resourceChunk
+	var err error
+	switch method {
+	case cmpRsrcZlib:
+		chunks, err = zlibResourceChunks(source, count)
+	case cmpRsrcLZVN, cmpRsrcLZFSE, cmpRsrcLZBitmap:
+		chunks, err = resourceChunks(source, count)
+	default:
+		return nil, fmt.Errorf("unsupported resource compression %d", method)
+	}
+	if err != nil {
+		return nil, err
+	}
+	cache, _ := lru.New[int, []byte](readerChunkCache)
+	return &File{ReaderAt: &compressedReader{source, chunks, int64(size), method, cache}, Size: int64(size)}, nil
+}
+
+func resourceChunks(source *File, count uint64) ([]resourceChunk, error) {
 	table := make([]byte, (count+1)*4)
 	if err := readFull(source, table, 0); err != nil {
 		return nil, err
 	}
-	offsets := make([]uint32, count+1)
-	for i := range offsets {
-		offsets[i] = le.Uint32(table[i*4:])
-		if i > 0 && (offsets[i] <= offsets[i-1] || offsets[i]-offsets[i-1] > readerChunkSize+1) {
-			return nil, fmt.Errorf("invalid resource offsets")
-		}
-	}
-	if offsets[0] != uint32(len(table)) || int64(offsets[len(offsets)-1]) != source.Size {
+	start := le.Uint32(table)
+	if start != uint32(len(table)) || int64(le.Uint32(table[len(table)-4:])) != source.Size {
 		return nil, fmt.Errorf("invalid resource table")
 	}
-	cache, _ := lru.New[int, []byte](readerChunkCache)
-	return &File{ReaderAt: &compressedReader{source, offsets, int64(size), method, cache}, Size: int64(size)}, nil
+	chunks := make([]resourceChunk, count)
+	for i := range chunks {
+		end := le.Uint32(table[(i+1)*4:])
+		if end <= start || end-start > readerChunkSize+1 {
+			return nil, fmt.Errorf("invalid resource offsets")
+		}
+		chunks[i] = resourceChunk{int64(start), end - start}
+		start = end
+	}
+	return chunks, nil
+}
+
+// A type-4 fork wraps the cmpf resource in a big-endian resource header.
+// Chunk offsets are relative to the little-endian count following its length word.
+func zlibResourceChunks(source *File, count uint64) ([]resourceChunk, error) {
+	var header [16]byte
+	if err := readFull(source, header[:], 0); err != nil {
+		return nil, err
+	}
+	offset := int64(binary.BigEndian.Uint32(header[:]))
+	length := int64(binary.BigEndian.Uint32(header[8:]))
+	tableSize := int64(count) * 8
+	if offset < int64(len(header)) || length < 8+tableSize || offset+length > source.Size {
+		return nil, fmt.Errorf("invalid zlib resource data area")
+	}
+	prefix := make([]byte, 8+tableSize)
+	if err := readFull(source, prefix, offset); err != nil {
+		return nil, err
+	}
+	size := int64(binary.BigEndian.Uint32(prefix))
+	if size > length-4 || uint64(le.Uint32(prefix[4:])) != count {
+		return nil, fmt.Errorf("invalid zlib resource table")
+	}
+	chunks := make([]resourceChunk, count)
+	previousEnd := 4 + tableSize
+	for i := range chunks {
+		entry := prefix[8+i*8:]
+		start, blockLength := le.Uint32(entry), le.Uint32(entry[4:])
+		end := int64(start) + int64(blockLength)
+		if int64(start) < previousEnd || blockLength == 0 || blockLength > readerChunkSize+1 || end > size {
+			return nil, fmt.Errorf("invalid zlib resource chunk %d", i)
+		}
+		chunks[i] = resourceChunk{offset + 4 + int64(start), blockLength}
+		previousEnd = end
+	}
+	return chunks, nil
 }
 
 func (r *compressedReader) ReadAt(p []byte, off int64) (int, error) {
@@ -1009,8 +1070,9 @@ func (r *compressedReader) chunk(index int) ([]byte, error) {
 	if data, ok := r.cache.Get(index); ok {
 		return data, nil
 	}
-	encoded := make([]byte, r.offsets[index+1]-r.offsets[index])
-	if err := readFull(r.source, encoded, int64(r.offsets[index])); err != nil {
+	chunk := r.chunks[index]
+	encoded := make([]byte, chunk.length)
+	if err := readFull(r.source, encoded, chunk.offset); err != nil {
 		return nil, err
 	}
 	size := min(int64(readerChunkSize), r.size-int64(index)*readerChunkSize)
