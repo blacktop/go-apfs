@@ -128,13 +128,33 @@ type Entry struct {
 	Type uint16
 }
 
+// Info is the ownership and mode of an inode, as its inode record holds them.
+// Mode is the type and permission bits, including setuid, setgid and sticky,
+// as an fs.FileMode; RawMode is the same mode_t as stored on disk, such as
+// 0o041777 for a sticky world-writable directory. UID and GID are the owner.
+type Info struct {
+	Mode    fs.FileMode
+	RawMode uint16
+	UID     uint32
+	GID     uint32
+}
+
+// EntryInfo is a directory entry together with the Info of the inode it names.
+type EntryInfo struct {
+	Entry
+	Info
+}
+
 // File reads the logical contents of a file, decompressing as needed. Size is
 // its length in bytes; reads that reach it return io.EOF. Mode is the inode's
-// type and permission bits, set on files returned by OpenFileID.
+// type and permission bits, and UID and GID its owner; all three are set on
+// files returned by OpenFileID.
 type File struct {
 	io.ReaderAt
 	Size int64
 	Mode fs.FileMode
+	UID  uint32
+	GID  uint32
 }
 
 // OpenReader opens the container held in the first size bytes of source, using
@@ -459,6 +479,11 @@ func (r *Reader) scanDir(id uint64, visit func(name []byte, id uint64, kind uint
 	if err != nil {
 		return err
 	}
+	return scanDirRecords(records, visit)
+}
+
+// scanDirRecords is scanDir over the records already read for a directory.
+func scanDirRecords(records []record, visit func(name []byte, id uint64, kind uint16)) error {
 	for _, rec := range records {
 		if rec.kind() != kindDirRec {
 			continue
@@ -515,6 +540,78 @@ func (r *Reader) Lookup(path string) (Entry, error) {
 		entry = *child
 	}
 	return entry, nil
+}
+
+// inodeInfo decodes the owner and mode of an inode record's value.
+func inodeInfo(inode []byte) (Info, error) {
+	if len(inode) < 92 {
+		return Info{}, fmt.Errorf("APFS inode record is missing or short")
+	}
+	return Info{Mode: inodeMode(inode), RawMode: le.Uint16(inode[80:]), UID: le.Uint32(inode[72:]), GID: le.Uint32(inode[76:])}, nil
+}
+
+// recordsInfo returns the Info of the inode record among an object's records.
+func recordsInfo(id uint64, records []record) (Info, error) {
+	for _, rec := range records {
+		if rec.kind() == kindInode {
+			return inodeInfo(rec.value)
+		}
+	}
+	return Info{}, fmt.Errorf("APFS inode %d has no inode record", id)
+}
+
+// StatID returns the mode and owner of the inode with number id, whatever its
+// type: a file, a directory (the root directory is types.ROOT_DIR_INO_NUM), a
+// symbolic link or a special file. An id without an inode record is an error.
+func (r *Reader) StatID(id uint64) (Info, error) {
+	records, err := r.records(id, false)
+	if err != nil {
+		return Info{}, err
+	}
+	return recordsInfo(id, records)
+}
+
+// Stat resolves path as Lookup does, without following symbolic links, and
+// returns its entry with the mode and owner of its inode. "/" and "" name the
+// root directory.
+func (r *Reader) Stat(path string) (EntryInfo, error) {
+	entry, err := r.Lookup(path)
+	if err != nil {
+		return EntryInfo{Entry: entry}, err
+	}
+	info, err := r.StatID(entry.ID)
+	return EntryInfo{entry, info}, err
+}
+
+// ReadDirInfoID returns the mode and owner of the directory with inode number
+// id, and its entries sorted by name, each with the mode and owner of its own
+// inode. The directory's Info comes from the same records as its entries; each
+// child costs one inode lookup, since a directory record holds only the
+// child's inode number and type. Unlike ReadDirID, an id without an inode
+// record is an error, as is an entry whose inode is missing.
+func (r *Reader) ReadDirInfoID(id uint64) (Info, []EntryInfo, error) {
+	records, err := r.records(id, false)
+	if err != nil {
+		return Info{}, nil, err
+	}
+	dir, err := recordsInfo(id, records)
+	if err != nil {
+		return Info{}, nil, err
+	}
+	var entries []EntryInfo
+	err = scanDirRecords(records, func(name []byte, id uint64, kind uint16) {
+		entries = append(entries, EntryInfo{Entry: Entry{string(name), id, kind}})
+	})
+	if err != nil {
+		return Info{}, nil, err
+	}
+	slices.SortFunc(entries, func(a, b EntryInfo) int { return strings.Compare(a.Name, b.Name) })
+	for i := range entries {
+		if entries[i].Info, err = r.StatID(entries[i].ID); err != nil {
+			return Info{}, nil, fmt.Errorf("%s: %w", entries[i].Name, err)
+		}
+	}
+	return dir, entries, nil
 }
 
 type readerExtent struct{ logical, physical, length uint64 }
@@ -825,6 +922,7 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 		}
 	}
 	file.Mode = inodeMode(inode)
+	file.UID, file.GID = le.Uint32(inode[72:]), le.Uint32(inode[76:])
 	return file, nil
 }
 
