@@ -8,9 +8,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/blacktop/go-apfs/pkg/disk/dmg"
 	"github.com/blacktop/go-apfs/types"
 	"github.com/blacktop/lzfse-cgo"
 )
@@ -216,7 +219,13 @@ func rangedFixture() []byte { return rangedFixtureNamed("fixture.loctable") }
 
 // rangedFixtureNamed builds the fixture with its first directory entry named
 // first.
-func rangedFixtureNamed(first string) []byte {
+func rangedFixtureNamed(first string) []byte { return rangedFixtureWith(first, false) }
+
+// ownedFixture is the fixture with owners on its inodes, an inode record for
+// the root directory, and a sticky subdirectory "tmp" (inode 7).
+func ownedFixture() []byte { return rangedFixtureWith("fixture.loctable", true) }
+
+func rangedFixtureWith(first string, owned bool) []byte {
 	const payloadBlock = 9
 	const (
 		rootLeaf   = uint16(types.BTNODE_ROOT | types.BTNODE_LEAF)
@@ -322,18 +331,34 @@ func rangedFixtureNamed(first string) []byte {
 	cmpHeader = le.AppendUint32(cmpHeader, cmpAttrUncompressed)
 	cmpHeader = le.AppendUint64(cmpHeader, uint64(len(cmpPayload)))
 	cmpHeader = append(append(cmpHeader, 0xcc), cmpPayload...)
-	node(7, sealedLeaf, 0, []rec{
+	own := func(r rec, uid, gid uint32) rec {
+		le.PutUint32(r.v[72:], uid)
+		le.PutUint32(r.v[76:], gid)
+		return r
+	}
+	var extra []rec
+	file3, link4 := inode(3, 7, uint16(types.REG)|0755), inode(4, 0, uint16(types.LNK)|0755)
+	if owned {
+		file3 = own(inode(3, 7, uint16(types.REG)|04755), 0, 80)
+		link4 = own(link4, 501, 20)
+		extra = []rec{
+			dirrec("tmp", 7, uint16(types.DT_DIR)),
+			own(inode(types.ROOT_DIR_INO_NUM, 0, uint16(types.DIR)|0750), 0, 80),
+			own(inode(7, 0, uint16(types.DIR)|01777), 0, 0),
+		}
+	}
+	node(7, sealedLeaf, 0, append(extra, []rec{
 		dirrec(first, 3, uint16(types.DT_REG)),
 		dirrec("link", 4, uint16(types.DT_LNK)),
 		dirrec("stream.cmp", 5, uint16(types.DT_REG)),
-		inode(3, 7, uint16(types.REG)|0755),
+		file3,
 		// An embedded resource fork that the plain file never needs.
 		xattr(3, types.XATTR_RESOURCEFORK_EA_NAME, xattrEmbedded, []byte("fork")),
-		inode(4, 0, uint16(types.LNK)|0755),
+		link4,
 		xattr(4, types.XATTR_SYMLINK_EA_NAME, xattrEmbedded, []byte("fixture.loctable\x00")),
 		inode(5, 0, uint16(types.REG)|0644),
 		xattr(5, types.XATTR_DECMPFS_EA_NAME, xattrStream, u64s(6, uint64(len(cmpHeader)), 0, 0, 0, 0)),
-	})
+	}...))
 	hash := sha256.Sum256(block(7))
 	child := append(u64s(1), hash[:]...)
 	node(6, rootHashed, 1, []rec{{key(types.ROOT_DIR_INO_NUM, kindDirRec, 8), child}})
@@ -378,6 +403,107 @@ func TestReaderSealedVolume(t *testing.T) {
 	fs = openTestReader(t, image)
 	if _, err := fs.ReadDirID(types.ROOT_DIR_INO_NUM); err == nil {
 		t.Fatal("accepted a sealed child with an invalid hash")
+	}
+}
+
+// TestReaderOwners checks that the mode and owner in the inode records reach
+// a directory itself, the volume root included, each listed child, and files
+// and symbolic links.
+func TestReaderOwners(t *testing.T) {
+	r := openTestReader(t, ownedFixture())
+	dir, children, err := r.ReadDirInfoID(types.ROOT_DIR_INO_NUM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Info{fs.ModeDir | 0750, uint16(types.DIR) | 0750, 0, 80}); dir != want {
+		t.Fatalf("root = %+v, want %+v", dir, want)
+	}
+	want := []EntryInfo{
+		{Entry{"fixture.loctable", 3, uint16(types.DT_REG)}, Info{fs.ModeSetuid | 0755, uint16(types.REG) | 04755, 0, 80}},
+		{Entry{"link", 4, uint16(types.DT_LNK)}, Info{fs.ModeSymlink | 0755, uint16(types.LNK) | 0755, 501, 20}},
+		{Entry{"stream.cmp", 5, uint16(types.DT_REG)}, Info{0644, uint16(types.REG) | 0644, 0, 0}},
+		{Entry{"tmp", 7, uint16(types.DT_DIR)}, Info{fs.ModeDir | fs.ModeSticky | 0777, uint16(types.DIR) | 01777, 0, 0}},
+	}
+	if !slices.Equal(children, want) {
+		t.Fatalf("children = %+v, want %+v", children, want)
+	}
+	// The listing agrees with ReadDirID, and Stat and StatID with the listing.
+	entries, err := r.ReadDirID(types.ROOT_DIR_INO_NUM)
+	if err != nil || len(entries) != len(children) {
+		t.Fatal(entries, err)
+	}
+	for i, child := range children {
+		if child.Entry != entries[i] {
+			t.Fatalf("entry %d = %+v, want %+v", i, child.Entry, entries[i])
+		}
+		if got, err := r.Stat("/" + child.Name); err != nil || got != child {
+			t.Fatalf("Stat(%s) = %+v, %v", child.Name, got, err)
+		}
+		if got, err := r.StatID(child.ID); err != nil || got != child.Info {
+			t.Fatalf("StatID(%d) = %+v, %v", child.ID, got, err)
+		}
+	}
+	for _, path := range []string{"/", ""} {
+		if root, err := r.Stat(path); err != nil || root.ID != types.ROOT_DIR_INO_NUM || root.Info != dir {
+			t.Fatalf("Stat(%q) = %+v, %v", path, root, err)
+		}
+	}
+	// An empty directory still has a mode and an owner of its own.
+	if tmp, empty, err := r.ReadDirInfoID(7); err != nil || tmp != want[3].Info || len(empty) != 0 {
+		t.Fatal(tmp, empty, err)
+	}
+	if file, _ := readTestFile(t, r, 3); file.Mode != fs.ModeSetuid|0755 || file.UID != 0 || file.GID != 80 {
+		t.Fatal(file.Mode, file.UID, file.GID)
+	}
+	if _, err := r.Stat("/missing"); err == nil {
+		t.Fatal("stat-ed a missing path")
+	}
+	if _, err := r.StatID(999); err == nil {
+		t.Fatal("stat-ed an inode number with no inode record")
+	}
+	// The plain fixture's root directory has no inode record: its entries
+	// still list, but nothing can be said of its mode or owner.
+	r = openTestReader(t, rangedFixture())
+	if _, _, err := r.ReadDirInfoID(types.ROOT_DIR_INO_NUM); !errContains(err, "no inode record") {
+		t.Fatalf("error = %v, want a missing inode record", err)
+	}
+	if info, err := r.StatID(4); err != nil || info != (Info{fs.ModeSymlink | 0755, uint16(types.LNK) | 0755, 0, 0}) {
+		t.Fatal(info, err)
+	}
+	if _, err := inodeInfo(make([]byte, 91)); err == nil {
+		t.Fatal("decoded a short inode record")
+	}
+}
+
+// TestReaderOwnersImage reads the mode and owner out of a real container,
+// testdata/test.dmg, made by a user with uid 501 and gid 20. It holds a root
+// directory and one file, with no setuid, setgid or sticky bit anywhere.
+func TestReaderOwnersImage(t *testing.T) {
+	d, err := dmg.Open("testdata/test.dmg", &dmg.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.Load(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenReader(d, int64(d.GetSize()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, children, err := r.ReadDirInfoID(types.ROOT_DIR_INO_NUM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Info{fs.ModeDir | 0755, uint16(types.DIR) | 0755, 501, 20}); dir != want {
+		t.Fatalf("root = %+v, want %+v", dir, want)
+	}
+	want := EntryInfo{Entry{"README.md", 16, uint16(types.DT_REG)}, Info{0644, uint16(types.REG) | 0644, 501, 20}}
+	if len(children) != 1 || children[0] != want {
+		t.Fatalf("children = %+v, want %+v", children, want)
+	}
+	if file, err := r.OpenFileID(want.ID); err != nil || file.Mode != 0644 || file.UID != 501 || file.GID != 20 {
+		t.Fatal(file, err)
 	}
 }
 
