@@ -406,14 +406,22 @@ func (r *Reader) records(object uint64, physical bool) ([]record, error) {
 	if physical {
 		root = r.extentRoot
 	}
-	return r.collect(nil, root, object, physical, map[uint64]bool{}, 0, nil)
+	return r.collect(nil, root, object, physical, map[uint64]bool{}, 0, nil, 0)
+}
+
+// stopped reports whether a collect told to stop at a record kind has found it.
+func stopped(result []record, stop uint64) bool {
+	return stop != 0 && len(result) > 0 && result[len(result)-1].kind() == stop
 }
 
 // collect appends the records for object under the node at address to result.
 // It is the one descent for both the file-system tree and the file-extent
 // tree; physical selects the extent tree's key layout and direct child
-// addresses. An object with no records yields none, without an error.
-func (r *Reader) collect(result []record, address, object uint64, physical bool, visited map[uint64]bool, depth int, hash []byte) ([]record, error) {
+// addresses. An object with no records yields none, without an error. A non-zero
+// stop ends the descent at the object's first record of that kind, which is
+// then the last one in the result, so that reading an inode does not visit
+// every leaf of a large directory or file.
+func (r *Reader) collect(result []record, address, object uint64, physical bool, visited map[uint64]bool, depth int, hash []byte, stop uint64) ([]record, error) {
 	if depth >= readerMaxDepth || len(visited) >= readerMaxNodes || visited[address] {
 		return nil, fmt.Errorf("APFS tree cycle or traversal limit")
 	}
@@ -430,6 +438,9 @@ func (r *Reader) collect(result []record, address, object uint64, physical bool,
 		for _, rec := range node.records {
 			if rec.treeID(physical) == object {
 				result = append(result, rec)
+				if stopped(result, stop) {
+					break
+				}
 			}
 		}
 		if len(result) > readerMaxRecords {
@@ -464,9 +475,12 @@ func (r *Reader) collect(result []record, address, object uint64, physical bool,
 				return nil, err
 			}
 		}
-		result, err = r.collect(result, child, object, physical, visited, depth+1, childHash)
+		result, err = r.collect(result, child, object, physical, visited, depth+1, childHash, stop)
 		if err != nil {
 			return nil, err
+		}
+		if stopped(result, stop) {
+			break
 		}
 	}
 	return result, nil
@@ -508,8 +522,17 @@ func scanDirRecords(records []record, visit func(name []byte, id uint64, kind ui
 // by name. The root directory is types.ROOT_DIR_INO_NUM. An id with no directory
 // records, including one that does not exist, yields no entries and no error.
 func (r *Reader) ReadDirID(id uint64) ([]Entry, error) {
+	records, err := r.records(id, false)
+	if err != nil {
+		return nil, err
+	}
+	return sortedEntries(records)
+}
+
+// sortedEntries returns the entries among a directory's records, sorted by name.
+func sortedEntries(records []record) ([]Entry, error) {
 	var entries []Entry
-	err := r.scanDir(id, func(name []byte, id uint64, kind uint16) {
+	err := scanDirRecords(records, func(name []byte, id uint64, kind uint16) {
 		entries = append(entries, Entry{string(name), id, kind})
 	})
 	if err != nil {
@@ -542,12 +565,14 @@ func (r *Reader) Lookup(path string) (Entry, error) {
 	return entry, nil
 }
 
-// inodeInfo decodes the owner and mode of an inode record's value.
+// inodeInfo decodes the owner and mode of an inode record's value, which is
+// at least 92 bytes; a nil value stands for a missing record.
 func inodeInfo(inode []byte) (Info, error) {
 	if len(inode) < 92 {
 		return Info{}, fmt.Errorf("APFS inode record is missing or short")
 	}
-	return Info{Mode: inodeMode(inode), RawMode: le.Uint16(inode[80:]), UID: le.Uint32(inode[72:]), GID: le.Uint32(inode[76:])}, nil
+	raw := le.Uint16(inode[80:])
+	return Info{Mode: fileMode(raw), RawMode: raw, UID: le.Uint32(inode[72:]), GID: le.Uint32(inode[76:])}, nil
 }
 
 // recordsInfo returns the Info of the inode record among an object's records.
@@ -564,7 +589,7 @@ func recordsInfo(id uint64, records []record) (Info, error) {
 // type: a file, a directory (the root directory is types.ROOT_DIR_INO_NUM), a
 // symbolic link or a special file. An id without an inode record is an error.
 func (r *Reader) StatID(id uint64) (Info, error) {
-	records, err := r.records(id, false)
+	records, err := r.collect(nil, r.root, id, false, map[uint64]bool{}, 0, nil, kindInode)
 	if err != nil {
 		return Info{}, err
 	}
@@ -586,8 +611,8 @@ func (r *Reader) Stat(path string) (EntryInfo, error) {
 // ReadDirInfoID returns the mode and owner of the directory with inode number
 // id, and its entries sorted by name, each with the mode and owner of its own
 // inode. The directory's Info comes from the same records as its entries; each
-// child costs one inode lookup, since a directory record holds only the
-// child's inode number and type. Unlike ReadDirID, an id without an inode
+// child costs one descent to its inode record, since a directory record holds
+// only the child's inode number and type. Unlike ReadDirID, an id without an inode
 // record is an error, as is an entry whose inode is missing.
 func (r *Reader) ReadDirInfoID(id uint64) (Info, []EntryInfo, error) {
 	records, err := r.records(id, false)
@@ -598,20 +623,19 @@ func (r *Reader) ReadDirInfoID(id uint64) (Info, []EntryInfo, error) {
 	if err != nil {
 		return Info{}, nil, err
 	}
-	var entries []EntryInfo
-	err = scanDirRecords(records, func(name []byte, id uint64, kind uint16) {
-		entries = append(entries, EntryInfo{Entry: Entry{string(name), id, kind}})
-	})
+	entries, err := sortedEntries(records)
 	if err != nil {
 		return Info{}, nil, err
 	}
-	slices.SortFunc(entries, func(a, b EntryInfo) int { return strings.Compare(a.Name, b.Name) })
-	for i := range entries {
-		if entries[i].Info, err = r.StatID(entries[i].ID); err != nil {
-			return Info{}, nil, fmt.Errorf("%s: %w", entries[i].Name, err)
+	children := make([]EntryInfo, len(entries))
+	for i, entry := range entries {
+		info, err := r.StatID(entry.ID)
+		if err != nil {
+			return Info{}, nil, fmt.Errorf("%s: %w", entry.Name, err)
 		}
+		children[i] = EntryInfo{entry, info}
 	}
-	return dir, entries, nil
+	return dir, children, nil
 }
 
 type readerExtent struct{ logical, physical, length uint64 }
@@ -819,9 +843,8 @@ func dstreamSize(inode []byte) (uint64, error) {
 	return size, nil
 }
 
-// inodeMode converts the Unix mode_t of an inode of at least 92 bytes.
-func inodeMode(inode []byte) fs.FileMode {
-	raw := le.Uint16(inode[80:])
+// fileMode converts the Unix mode_t of an inode.
+func fileMode(raw uint16) fs.FileMode {
 	mode := fs.FileMode(raw & 0777)
 	if raw&04000 != 0 {
 		mode |= fs.ModeSetuid
@@ -887,8 +910,9 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 			extents = append(extents, extent)
 		}
 	}
-	if len(inode) < 92 {
-		return nil, fmt.Errorf("APFS file has no valid inode")
+	info, err := inodeInfo(inode)
+	if err != nil {
+		return nil, err
 	}
 	var file *File
 	if compression != nil {
@@ -921,8 +945,7 @@ func (r *Reader) OpenFileID(id uint64) (*File, error) {
 			return nil, err
 		}
 	}
-	file.Mode = inodeMode(inode)
-	file.UID, file.GID = le.Uint32(inode[72:]), le.Uint32(inode[76:])
+	file.Mode, file.UID, file.GID = info.Mode, info.UID, info.GID
 	return file, nil
 }
 
